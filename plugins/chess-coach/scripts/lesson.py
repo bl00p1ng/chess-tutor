@@ -371,6 +371,7 @@ def load_lesson_file(path: str) -> dict:
 # ---------------------------------------------------------------------------
 GAME_STATE_PATH = "~/.chess_coach/current_game.json"
 LEARNING_STATE_PATH = "~/.chess_coach/learning.json"
+PROFILE_PATH = "~/.chess_coach/profile.json"
 BUNDLED_LESSONS_DIR_DEFAULT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "lessons")
 )
@@ -404,6 +405,20 @@ def load_learning_progress() -> dict:
         return {"schema_version": 1, "completed": {}, "last_lesson_id": None}
     with open(path) as f:
         return json.load(f)
+
+
+def _profile_nickname() -> str:
+    """Return a usable profile nickname, expanding its path only when start
+    runs. Do not import profile.py: its HOME-dependent constants are fixed at
+    import time and its filename shadows the stdlib module."""
+    try:
+        with open(os.path.expanduser(PROFILE_PATH)) as f:
+            profile = json.load(f)
+    except (OSError, ValueError):
+        return "learner"
+
+    nickname = profile.get("nickname") if isinstance(profile, dict) else None
+    return nickname if isinstance(nickname, str) and nickname.strip() else "learner"
 
 
 def _curriculum_order(lessons: dict) -> list:
@@ -507,11 +522,12 @@ def cmd_start(args) -> dict:
     board = chess.Board(lesson["start_fen"])
     learner_color = lesson["player_color"]
     other_color = "black" if learner_color == "white" else "white"
+    learner_name = _profile_nickname()
     state_path = os.path.expanduser(args.state)
     state = {
         "color": learner_color,
-        "player_name": "learner",
-        "players": {learner_color: "learner", other_color: "ai"},
+        "player_name": learner_name,
+        "players": {learner_color: learner_name, other_color: "ai"},
         "level": "beginner",
         "mode": "lesson",
         "moves_uci": [], "moves_san": [], "move_records": [],

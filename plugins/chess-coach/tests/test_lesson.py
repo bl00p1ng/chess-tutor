@@ -576,6 +576,111 @@ def test_start_gates_out_of_order_allows_replay(tmp_path, monkeypatch):
     assert replay["lesson_id"] == "l1"
 
 
+# ---------------------------------------------------------------------------
+# 4b.8 — cmd_start reads a profile nickname at call time. lesson.py must not
+# import profile.py: that module expands HOME at import time and shadows the
+# stdlib profile module.
+# ---------------------------------------------------------------------------
+def test_start_uses_profile_nickname_expanded_at_call_time(tmp_path, monkeypatch):
+    """A nickname in the HOME selected after lesson.py import becomes both
+    player_name and the learner's players entry in a new lesson state."""
+    home = tmp_path / "home"
+    profile_path = home / ".chess_coach" / "profile.json"
+    profile_path.parent.mkdir(parents=True)
+    profile_path.write_text(json.dumps({"nickname": "Ada"}))
+    monkeypatch.setenv("HOME", str(home))
+
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    write_lesson_file(str(bundled), id="l1")
+    state_path = tmp_path / "lesson_state.json"
+
+    result = cmd_start(SimpleNamespace(
+        id="l1", state=str(state_path), bundled_dir=str(bundled),
+        user_dir=str(tmp_path / "user"),
+    ))
+
+    assert result["ok"] is True
+    saved = json.loads(state_path.read_text())
+    assert saved["player_name"] == "Ada"
+    assert saved["players"] == {"white": "Ada", "black": "ai"}
+
+
+@pytest.mark.parametrize(
+    ("profile_contents", "expected_name"),
+    [
+        (json.dumps({"nickname": "Bea"}), "Bea"),
+        (None, "learner"),
+        ("{", "learner"),
+        (json.dumps({}), "learner"),
+        (json.dumps({"nickname": ""}), "learner"),
+        (json.dumps({"nickname": "   "}), "learner"),
+        (json.dumps({"nickname": None}), "learner"),
+        (json.dumps({"nickname": 7}), "learner"),
+    ],
+    ids=["second-nickname", "missing", "malformed", "absent", "empty", "blank", "null", "invalid"],
+)
+def test_start_uses_profile_or_falls_back_for_unusable_nickname(
+    tmp_path, monkeypatch, profile_contents, expected_name,
+):
+    """A second real name proves the reader is not hardcoded; every absent,
+    empty, malformed, or schema-invalid profile value falls back safely."""
+    home = tmp_path / "home"
+    profile_path = home / ".chess_coach" / "profile.json"
+    profile_path.parent.mkdir(parents=True)
+    if profile_contents is not None:
+        profile_path.write_text(profile_contents)
+    monkeypatch.setenv("HOME", str(home))
+
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    write_lesson_file(str(bundled), id="l1")
+    state_path = tmp_path / "lesson_state.json"
+
+    result = cmd_start(SimpleNamespace(
+        id="l1", state=str(state_path), bundled_dir=str(bundled),
+        user_dir=str(tmp_path / "user"),
+    ))
+
+    assert result["ok"] is True
+    saved = json.loads(state_path.read_text())
+    assert saved["player_name"] == expected_name
+    assert saved["players"] == {"white": expected_name, "black": "ai"}
+
+
+def test_start_falls_back_when_profile_is_unreadable(tmp_path, monkeypatch):
+    """An OSError while reading the temporary HOME profile cannot block
+    lesson start or leak a name into either learner state field."""
+    home = tmp_path / "home"
+    profile_path = home / ".chess_coach" / "profile.json"
+    profile_path.parent.mkdir(parents=True)
+    profile_path.write_text(json.dumps({"nickname": "Ada"}))
+    monkeypatch.setenv("HOME", str(home))
+
+    original_open = open
+
+    def unreadable_profile_open(path, *args, **kwargs):
+        if os.fspath(path) == str(profile_path):
+            raise OSError("profile is unreadable")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", unreadable_profile_open)
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    write_lesson_file(str(bundled), id="l1")
+    state_path = tmp_path / "lesson_state.json"
+
+    result = cmd_start(SimpleNamespace(
+        id="l1", state=str(state_path), bundled_dir=str(bundled),
+        user_dir=str(tmp_path / "user"),
+    ))
+
+    assert result["ok"] is True
+    saved = json.loads(state_path.read_text())
+    assert saved["player_name"] == "learner"
+    assert saved["players"] == {"white": "learner", "black": "ai"}
+
+
 def test_cli_list_runs_via_subprocess(tmp_path):
     """Real end-to-end CLI proof: argparse + dispatch + main(), not just the
     cmd_* functions called directly in-process."""
