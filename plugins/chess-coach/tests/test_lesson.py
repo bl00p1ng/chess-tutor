@@ -41,6 +41,7 @@ from lesson import (  # noqa: E402
     cmd_show,
     cmd_start,
     cmd_attempt,
+    cmd_hint,
     cmd_status,
     _refuse_game_state_path,
 )
@@ -901,3 +902,59 @@ def test_attempt_solved_records_completion(tmp_path, monkeypatch):
         learning = json.load(f)
     assert "knight-tour-1" in learning["completed"]
     assert learning["last_lesson_id"] == "knight-tour-1"
+
+
+# ---------------------------------------------------------------------------
+# 4b.3 — hint: records usage as informational data only, never gates
+# completion (spec: "Hints Never Gate" / scenario "Completion after all
+# hints"). Needs attempt's solved branch (4b.7, above) to prove the
+# scenario for real, per the tasks artifact's own dependency note.
+# ---------------------------------------------------------------------------
+def test_hint_does_not_gate_completion(tmp_path, monkeypatch):
+    """Spec scenario 'Completion after all hints': a learner who has
+    consumed EVERY hint must still complete identically to a hint-free
+    pass, with the hint count recorded but uninvolved in the gate."""
+    home = tmp_path / "home"
+    (home / ".chess_coach").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    lesson = make_lesson()  # one hint, reach_square target f6
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state, name="hint.json")
+
+    for _ in lesson["hints"]:
+        hint_result = cmd_hint(SimpleNamespace(state=state_path))
+        assert hint_result["ok"] is True
+        assert hint_result["hint"]
+
+    with open(state_path) as f:
+        after_hints = json.load(f)
+    assert after_hints["lesson"]["hints_used"] == len(lesson["hints"])
+    assert after_hints["lesson"]["result"] is None  # not gated by hints
+
+    solved = cmd_attempt(SimpleNamespace(move="d5f6", state=state_path))
+    assert solved["ok"] is True
+    assert solved["result"] == "solved"  # identical to a hint-free pass
+
+    with open(home / ".chess_coach" / "learning.json") as f:
+        learning = json.load(f)
+    assert learning["completed"]["knight-tour-1"]["hints_used"] == len(lesson["hints"])
+
+
+def test_hint_refuses_game_state_path(tmp_path, monkeypatch):
+    """D7-E wiring proof for hint — the helper and its direct-call test
+    already exist (4b-i); attempt/status wiring is proven in 4b-ii. This
+    proves hint calls it too, via the same non-literal (symlink) path
+    form, rather than adding a marker key inside the lesson file."""
+    home = tmp_path / "home"
+    (home / ".chess_coach").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    game_path = home / ".chess_coach" / "current_game.json"
+    game_path.write_text("{}")
+    sneaky_link = tmp_path / "sneaky_hint.json"
+    sneaky_link.symlink_to(game_path)
+
+    result = cmd_hint(SimpleNamespace(state=str(sneaky_link)))
+
+    assert result["ok"] is False
+    assert "in-progress game" in result["error"]

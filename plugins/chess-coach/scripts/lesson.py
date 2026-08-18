@@ -709,6 +709,31 @@ def cmd_attempt(args) -> dict:
                           board_before, move, args.state)
 
 
+def cmd_hint(args) -> dict:
+    """Records hint usage as informational data only (spec: Hints Never
+    Gate) — never blocks, delays, or alters completion (task 4b.3)."""
+    refusal = _refuse_game_state_path(args.state)
+    if refusal:
+        return refusal
+
+    state = _load_lesson_state(args.state)
+    lesson_block = state["lesson"]
+    hints = lesson_block["definition"]["hints"]
+    if not hints:
+        return {"ok": False, "error": "This lesson has no hints to give."}
+
+    index = min(lesson_block["hints_used"], len(hints) - 1)
+    hint_text = hints[index]
+    lesson_block["hints_used"] += 1
+    _save_lesson_state(state, args.state)
+
+    return {
+        "ok": True, "hint": hint_text,
+        "hints_used": lesson_block["hints_used"],
+        "hints_remaining": max(0, len(hints) - lesson_block["hints_used"]),
+    }
+
+
 def _stage_summary(ordered: list, completed_ids: set) -> dict:
     summary: dict = {}
     for lesson in ordered:
@@ -789,7 +814,8 @@ def main():
     su.add_argument("--bundled-dir", default=BUNDLED_LESSONS_DIR_DEFAULT)
     su.add_argument("--user-dir",    default=USER_LESSONS_DIR_DEFAULT)
 
-    # hint is added in slice 4b-iii.
+    hi = sub.add_parser("hint")
+    hi.add_argument("--state", default=LESSON_STATE_PATH)
 
     args = p.parse_args()
     if not args.command:
@@ -808,7 +834,7 @@ def main():
 
     dispatch = {
         "list": cmd_list, "show": cmd_show, "start": cmd_start,
-        "attempt": cmd_attempt, "status": cmd_status,
+        "attempt": cmd_attempt, "status": cmd_status, "hint": cmd_hint,
     }
     result = dispatch[args.command](args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
