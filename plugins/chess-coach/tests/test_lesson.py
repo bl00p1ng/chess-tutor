@@ -834,6 +834,12 @@ def test_rebase_turn_and_legality_guard(tmp_path):
 
     assert guard_result["ok"] is False
     assert guard_result["error"]
+    # "Saves nothing" must be test-backed, not merely asserted in prose —
+    # reload the file and confirm it is byte-for-byte the pre-attempt state.
+    with open(guard_path) as f:
+        guard_saved = json.load(f)
+    assert guard_saved["start_fen"] == CHECK_ON_REBASE_FEN
+    assert guard_saved["lesson"]["moves_used"] == 0
 
 
 def test_reset_on_exhausted_budget(tmp_path):
