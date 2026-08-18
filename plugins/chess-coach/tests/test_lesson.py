@@ -781,3 +781,123 @@ def test_status_no_active_lesson_when_state_missing(tmp_path):
         bundled_dir=str(tmp_path / "bundled"), user_dir=str(tmp_path / "user"),
     ))
     assert result["active"] is None
+
+
+# ---------------------------------------------------------------------------
+# 4b-iii — attempt's accept path: predicate dispatch, D2 post-move FEN
+# rebase, idle-king legality guard, move/attempt budgets, reset-on-
+# exhaustion, and the solved branch (learning.json write). Reuses fixtures
+# pre-verified in 4b-ii: KNIGHT_D5_FEN (4a) for the normal-rebase case,
+# CHECK_ON_REBASE_FEN below for the legality-guard case.
+# ---------------------------------------------------------------------------
+CHECK_ON_REBASE_FEN = "7k/8/8/R7/8/8/8/4K3 w - - 0 1"
+
+
+def test_rebase_turn_and_legality_guard(tmp_path):
+    """Fused (one function, per the task's singular name): a normal
+    non-solving move rebases start_fen with the turn flipped back to the
+    learner, and moves_uci/moves_san are actually populated then cleared
+    (non-vacuous — a regression that dropped the clear would leave them
+    non-empty and fail this). Second scenario: a move whose rebase would
+    leave the IDLE opponent king illegally in check is a malformed-lesson
+    error (ok:false), not a silently saved bad position."""
+    # Scenario 1: normal rebase.
+    lesson = make_lesson()  # reach_square target f6, KNIGHT_D5_FEN, max_moves=3
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state, name="rebase.json")
+
+    result = cmd_attempt(SimpleNamespace(move="d5b4", state=state_path))
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["result"] == "in_progress"
+    assert result["position_reset"] is False
+    with open(state_path) as f:
+        saved = json.load(f)
+    assert saved["moves_uci"] == []
+    assert saved["moves_san"] == []
+    assert saved["lesson"]["moves_used"] == 1
+    rebased_board = chess.Board(saved["start_fen"])
+    assert rebased_board.turn == chess.WHITE  # flipped back to the learner
+    assert rebased_board.piece_at(chess.B4).piece_type == chess.KNIGHT
+
+    # Scenario 2: idle-king legality guard.
+    guard_lesson = make_lesson(
+        id="guard-lesson", start_fen=CHECK_ON_REBASE_FEN,
+        objective={"type": "reach_square", "square": "a1", "piece": "R", "max_moves": 3},
+    )
+    guard_state = make_lesson_state(guard_lesson)
+    guard_path = write_state_file(tmp_path, guard_state, name="guard.json")
+
+    guard_result = cmd_attempt(SimpleNamespace(move="a5h5", state=guard_path))
+
+    assert guard_result["ok"] is False
+    assert guard_result["error"]
+
+
+def test_reset_on_exhausted_budget(tmp_path):
+    """Fused: (1) the move budget is exhausted this attempt but attempts
+    remain — the position resets to definition.start_fen, attempts_used
+    increments, moves_used zeroes; (2) triangulation — attempts are ALSO
+    exhausted, so the drill terminates as failed and echoes solution_text
+    for narration, rather than silently resetting forever."""
+    # Scenario 1: reset, attempts remain.
+    lesson = make_lesson(
+        objective={"type": "reach_square", "square": "f6", "piece": "N", "max_moves": 1},
+        max_attempts=2,
+    )
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state, name="reset.json")
+
+    result = cmd_attempt(SimpleNamespace(move="d5b4", state=state_path))
+
+    assert result["ok"] is True
+    assert result["position_reset"] is True
+    assert result["result"] == "in_progress"
+    with open(state_path) as f:
+        saved = json.load(f)
+    assert saved["start_fen"] == KNIGHT_D5_FEN
+    assert saved["moves_uci"] == []
+    assert saved["lesson"]["attempts_used"] == 1
+    assert saved["lesson"]["moves_used"] == 0
+
+    # Scenario 2: attempts also exhausted — terminal failed.
+    terminal_lesson = make_lesson(
+        id="knight-tour-terminal",
+        objective={"type": "reach_square", "square": "f6", "piece": "N", "max_moves": 1},
+        max_attempts=1,
+    )
+    terminal_state = make_lesson_state(terminal_lesson)
+    terminal_path = write_state_file(tmp_path, terminal_state, name="failed.json")
+
+    terminal_result = cmd_attempt(SimpleNamespace(move="d5b4", state=terminal_path))
+
+    assert terminal_result["result"] == "failed"
+    assert terminal_result["solution_text"] == terminal_lesson["solution_text"]
+    with open(terminal_path) as f:
+        terminal_saved = json.load(f)
+    assert terminal_saved["lesson"]["result"] == "failed"
+
+
+def test_attempt_solved_records_completion(tmp_path, monkeypatch):
+    """Solved path: a satisfying move records result=solved and writes
+    completion into learning.json — no separate command (design). HOME is
+    monkeypatched so this never touches the real ~/.chess_coach/."""
+    home = tmp_path / "home"
+    (home / ".chess_coach").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    lesson = make_lesson()  # reach_square target f6
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state, name="solved.json")
+
+    result = cmd_attempt(SimpleNamespace(move="d5f6", state=state_path))
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["result"] == "solved"
+    assert result["fen"]
+    with open(home / ".chess_coach" / "learning.json") as f:
+        learning = json.load(f)
+    assert "knight-tour-1" in learning["completed"]
+    assert learning["last_lesson_id"] == "knight-tour-1"

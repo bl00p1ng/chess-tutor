@@ -31,6 +31,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 
 import chess
 
@@ -542,12 +543,125 @@ def _load_lesson_state(path: str) -> dict:
         return json.load(f)
 
 
+def _rebase(board_after: "chess.Board", player_color: bool) -> tuple:
+    """D2: after a non-terminal accepted move, rewrite the position so the
+    learner is to move again (no opponent in a solo drill) with no pending
+    en passant capture. Fails loudly — returns an error instead of a FEN —
+    if the flip would leave the IDLE opponent king illegally in check: a
+    malformed-lesson condition, not a normal user-facing rejection."""
+    rebased = board_after.copy()
+    rebased.turn = player_color
+    rebased.ep_square = None
+    idle_king = rebased.king(not player_color)
+    if idle_king is not None and rebased.is_attacked_by(player_color, idle_king):
+        return None, "This lesson's setup is invalid after that move."
+    return rebased.fen(), None
+
+
+def _record_completion(lesson_id: str, attempts_used: int, hints_used: int) -> None:
+    """Record a solved lesson into learning.json (design: 'no separate
+    command'). hints_used is stored for informational display only — it
+    never fed the gate that got us here (spec: Hints Never Gate)."""
+    path = os.path.expanduser(LEARNING_STATE_PATH)
+    progress = load_learning_progress()
+    progress["completed"][lesson_id] = {
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "attempts": attempts_used,
+        "hints_used": hints_used,
+    }
+    progress["last_lesson_id"] = lesson_id
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(progress, f, indent=2, ensure_ascii=False)
+
+
+def _attempt_move(state: dict, lesson_block: dict, definition: dict, objective: dict,
+                   obj_type: str, board_before: "chess.Board", move: "chess.Move",
+                   state_path: str) -> dict:
+    """Evaluate an accepted (chess-legal) move against its PREDICATES
+    checker and apply the outcome: solved (+learning.json write), a D2
+    rebase for a non-terminal miss, or a reset once the move budget for
+    this attempt is exhausted (itself terminal as 'failed' once attempts
+    are exhausted too). move_uci/move_san are appended to the state's
+    top-level lists BEFORE the solved/rebase/reset branch below so the
+    branch's own clearing (or, on solve, deliberate non-clearing) is
+    provably non-vacuous rather than clearing an already-empty list."""
+    move_san = board_before.san(move)
+    move_uci = move.uci()
+    board_after = board_before.copy()
+    board_after.push(move)
+
+    player_color = chess.WHITE if definition["player_color"] == "white" else chess.BLACK
+    satisfied, detail = PREDICATES[obj_type](
+        objective, board_before=board_before, move=move, board_after=board_after,
+        player_color=player_color,
+    )
+
+    state["moves_uci"].append(move_uci)
+    state["moves_san"].append(move_san)
+    lesson_block["moves_used"] += 1
+    max_moves = objective.get("max_moves", 1)
+    max_attempts = definition["max_attempts"]
+
+    response = {
+        "ok": True, "accepted": True,
+        "move_san": move_san, "move_uci": move_uci,
+        "detail": detail, "goal": definition["goal"],
+    }
+
+    if satisfied:
+        # Terminal: no more moves needed, so no rebase — moves_uci/
+        # moves_san stay populated with this winning move, which keeps
+        # board_from_state(state) consistent with the reported fen below.
+        lesson_block["result"] = "solved"
+        response["result"] = "solved"
+        response["fen"] = board_after.fen()
+        response["success_text"] = definition["success_text"]
+        _record_completion(definition["id"], lesson_block["attempts_used"], lesson_block["hints_used"])
+    elif lesson_block["moves_used"] < max_moves:
+        rebased_fen, guard_error = _rebase(board_after, player_color)
+        if guard_error:
+            # Malformed lesson — fail loudly, save nothing (D2 guard).
+            return {"ok": False, "error": guard_error}
+        state["start_fen"] = rebased_fen
+        state["moves_uci"] = []
+        state["moves_san"] = []
+        response["result"] = "in_progress"
+        response["fen"] = rebased_fen
+        response["position_reset"] = False
+    else:
+        # Move budget for this attempt is exhausted — reset to the
+        # lesson's ORIGINAL fen (already load-time validated), never a
+        # rebased one, and count the attempt.
+        lesson_block["attempts_used"] += 1
+        lesson_block["moves_used"] = 0
+        state["start_fen"] = definition["start_fen"]
+        state["moves_uci"] = []
+        state["moves_san"] = []
+        response["position_reset"] = True
+        response["fen"] = definition["start_fen"]
+        if lesson_block["attempts_used"] >= max_attempts:
+            lesson_block["result"] = "failed"
+            response["result"] = "failed"
+            response["solution_text"] = definition["solution_text"]
+            response["failure_text"] = definition["failure_text"]
+        else:
+            response["result"] = "in_progress"
+
+    response["moves_used"] = lesson_block["moves_used"]
+    response["moves_remaining"] = max(0, max_moves - lesson_block["moves_used"])
+    response["attempts_used"] = lesson_block["attempts_used"]
+    response["attempts_remaining"] = max(0, max_attempts - lesson_block["attempts_used"])
+
+    _save_lesson_state(state, state_path)
+    return response
+
+
 def cmd_attempt(args) -> dict:
-    """Reject-before-dispatch gate only (tasks 4b.1/4b.2) — this is the
-    slice that makes adjudication #1's dispatch boundary real. Evaluating
-    an ACCEPTED move (predicate dispatch, D2 rebase, budget/reset) is
-    slice 4b-iii; reaching that point here returns a clear not-yet-built
-    response rather than silently mishandling a legal move."""
+    """Reject-before-dispatch gate (tasks 4b.1/4b.2 — adjudication #1's
+    dispatch boundary), then the accept path (task 4b.7): predicate
+    dispatch, D2 post-move rebase with the idle-king legality guard,
+    move/attempt budgets, reset-on-exhaustion, and the solved branch."""
     refusal = _refuse_game_state_path(args.state)
     if refusal:
         return refusal
@@ -591,11 +705,8 @@ def cmd_attempt(args) -> dict:
             "reason": "That move is not legal in the current position.",
         }
 
-    # A legal move on a real predicate — evaluation lands in slice 4b-iii.
-    return {
-        "ok": False,
-        "error": "Move evaluation is not implemented in this build yet.",
-    }
+    return _attempt_move(state, lesson_block, definition, objective, obj_type,
+                          board_before, move, args.state)
 
 
 def _stage_summary(ordered: list, completed_ids: set) -> dict:
