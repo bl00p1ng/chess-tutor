@@ -826,6 +826,7 @@ def test_rebase_turn_and_legality_guard(tmp_path):
     guard_lesson = make_lesson(
         id="guard-lesson", start_fen=CHECK_ON_REBASE_FEN,
         objective={"type": "reach_square", "square": "a1", "piece": "R", "max_moves": 3},
+        allowed_pieces=["R"],  # matches the objective's own "piece": "R"
     )
     guard_state = make_lesson_state(guard_lesson)
     guard_path = write_state_file(tmp_path, guard_state, name="guard.json")
@@ -1112,3 +1113,29 @@ def test_attempt_quiz_invalid_square_name_fails_cleanly(tmp_path):
 
     assert result["ok"] is False
     assert result["error"]
+
+
+# ---------------------------------------------------------------------------
+# 4b-iv (task 4b.10) — allowed_pieces enforcement. The design's attempt
+# response contract lists an allowed_pieces violation as a no-budget-
+# consumed accepted:false reject, the same reject-before-dispatch pattern
+# as the illegal-move check (4b.1) — decided by the design, not invented
+# here, and proven with an executable assertion rather than left accidental.
+# ---------------------------------------------------------------------------
+def test_attempt_allowed_pieces_violation_rejected_no_budget_consumed(tmp_path):
+    """A legal king shuffle is rejected because only the knight ('N') is
+    allowed in this lesson — no budget (moves_used/attempts_used) consumed,
+    mirroring the illegal-move check's no-budget contract exactly."""
+    lesson = make_lesson()  # allowed_pieces=["N"], KNIGHT_D5_FEN, king on e1
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state, name="allowed_pieces.json")
+
+    result = cmd_attempt(SimpleNamespace(move="e1e2", state=state_path))  # legal king shuffle
+
+    assert result["ok"] is True
+    assert result["accepted"] is False
+    assert result["reason"]
+    with open(state_path) as f:
+        saved = json.load(f)
+    assert saved["lesson"]["moves_used"] == 0
+    assert saved["lesson"]["attempts_used"] == 0

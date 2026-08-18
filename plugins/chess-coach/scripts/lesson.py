@@ -798,6 +798,19 @@ def cmd_attempt(args) -> dict:
             "reason": "That move is not legal in the current position.",
         }
 
+    # allowed_pieces enforcement (task 4b.10): the design's attempt
+    # response contract names this violation as a no-budget-consumed
+    # reject, the same reject-before-dispatch pattern as the illegal-move
+    # check above — decided by the design, tested explicitly here, not
+    # left accidental.
+    moved_piece = board_before.piece_at(move.from_square)
+    allowed = {p.upper() for p in definition["allowed_pieces"]}
+    if moved_piece is not None and moved_piece.symbol().upper() not in allowed:
+        return {
+            "ok": True, "accepted": False,
+            "reason": "That piece is not allowed to move in this lesson.",
+        }
+
     return _attempt_move(state, lesson_block, definition, objective, obj_type,
                           board_before, move, args.state)
 
