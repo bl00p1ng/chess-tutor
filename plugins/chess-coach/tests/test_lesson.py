@@ -1247,30 +1247,73 @@ def test_attempt_allowed_pieces_violation_rejected_no_budget_consumed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# OPEN QUESTION (surfaced by the 4b-iii gate review, still unresolved as of
-# 4b-iv, not specified anywhere in spec/design/tasks): attempt against an
-# ALREADY-terminal lesson state has no guard and currently re-dispatches,
-# mutating counters again. This is a PIN, not a specification — it records
-# today's behavior so a deliberate future change (adding a terminal guard)
-# has a test to update, rather than an unnoticed regression either way.
-# Both the move-type path (pinned here) and the new quiz path (4b.9) share
-# this same gap, since neither _attempt_move nor _attempt_quiz checks
-# lesson_block["result"] before proceeding.
+# 4b-vi — terminal lesson attempts are rejected before either route parses
+# arguments, dispatches a predicate, consumes a budget, or saves state.
 # ---------------------------------------------------------------------------
-def test_attempt_against_terminal_state_currently_re_dispatches(tmp_path):
-    """PINS current (unspecified) behavior: a non-solving move submitted
-    against a state whose lesson.result is ALREADY 'solved' still
-    dispatches and mutates moves_used — the stale 'solved' result is never
-    reset by the rebase branch. Not asserted as correct, only as known."""
-    lesson = make_lesson()  # reach_square target f6, max_moves=3
-    state = make_lesson_state(lesson, result="solved", moves_used=1)
-    state_path = write_state_file(tmp_path, state, name="terminal_redispatch.json")
+@pytest.mark.parametrize(
+    ("terminal_result", "objective", "attempt_kwargs"),
+    [
+        (
+            "solved",
+            {"type": "reach_square", "square": "f6", "piece": "N", "max_moves": 3},
+            {"move": "d5b4"},
+        ),
+        (
+            "failed",
+            {"type": "reach_square", "square": "f6", "piece": "N", "max_moves": 3},
+            {"move": "d5b4"},
+        ),
+        (
+            "solved",
+            {"type": "legal_moves_from_square", "square": "d5"},
+            {"squares": "f6,b4"},
+        ),
+        (
+            "failed",
+            {"type": "legal_moves_from_square", "square": "d5"},
+            {"squares": "f6,b4"},
+        ),
+    ],
+    ids=["move-solved", "move-failed", "quiz-solved", "quiz-failed"],
+)
+def test_attempt_against_terminal_state_rejected_without_mutation(
+    tmp_path, terminal_result, objective, attempt_kwargs,
+):
+    """Solved and failed move/quiz lessons reject a further valid submission
+    without changing any persisted terminal state, counters, or history."""
+    lesson = make_lesson(objective=objective)
+    prior_moves = ["d5b4", "e8e7", "b4d5", "e7e8"]
+    state = make_lesson_state(
+        lesson,
+        result=terminal_result,
+        moves_used=1,
+        attempts_used=lesson["max_attempts"] if terminal_result == "failed" else 1,
+        moves_history=prior_moves.copy(),
+    )
+    state["moves_uci"] = prior_moves.copy()
+    state["moves_san"] = ["Nb4", "Ke7", "Nd5", "Ke8"]
+    state["move_records"] = [{"uci": move} for move in prior_moves]
+    state["result"] = terminal_result
+    state_path = write_state_file(tmp_path, state, name=f"terminal_{terminal_result}.json")
+    with open(state_path, "rb") as f:
+        before_bytes = f.read()
+    before_state = json.loads(before_bytes)
 
-    result = cmd_attempt(SimpleNamespace(move="d5b4", state=state_path))  # non-solving move
+    result = cmd_attempt(SimpleNamespace(state=state_path, **attempt_kwargs))
 
     assert result["ok"] is True
-    assert result["accepted"] is True
-    with open(state_path) as f:
-        saved = json.load(f)
-    assert saved["lesson"]["moves_used"] == 2       # incremented again post-terminal
-    assert saved["lesson"]["result"] == "solved"     # stale — never reset by the rebase branch
+    assert result["accepted"] is False
+    assert terminal_result in result["reason"]
+    assert "terminal" in result["reason"].lower()
+    with open(state_path, "rb") as f:
+        saved_bytes = f.read()
+    assert saved_bytes == before_bytes
+    saved = json.loads(saved_bytes)
+    assert saved["result"] == before_state["result"]
+    assert saved["lesson"]["result"] == before_state["lesson"]["result"]
+    assert saved["lesson"]["moves_used"] == before_state["lesson"]["moves_used"]
+    assert saved["lesson"]["attempts_used"] == before_state["lesson"]["attempts_used"]
+    assert saved["moves_uci"] == before_state["moves_uci"]
+    assert saved["moves_san"] == before_state["moves_san"]
+    assert saved["move_records"] == before_state["move_records"]
+    assert saved["lesson"]["moves_history"] == before_state["lesson"]["moves_history"]

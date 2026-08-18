@@ -772,6 +772,16 @@ def cmd_attempt(args) -> dict:
 
     state = _load_lesson_state(args.state)
     lesson_block = state["lesson"]
+    terminal_result = lesson_block.get("result")
+    if terminal_result in ("solved", "failed"):
+        return {
+            "ok": True, "accepted": False,
+            "reason": (
+                f"This lesson is already {terminal_result}; terminal lessons "
+                "cannot accept another attempt."
+            ),
+        }
+
     definition = lesson_block["definition"]
     objective = definition["objective"]
     obj_type = objective.get("type")
