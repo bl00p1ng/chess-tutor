@@ -21,8 +21,8 @@ Slice 4a3 implemented load_lesson_file and LessonValidationError below —
 single-file read + validate only, no bundled/user-dir merge (that is
 slice 4b's `list` command).
 
-Runnable directly as a CLI (list/show/start/attempt/status) or imported
-as a library.
+Runnable directly as a CLI (list/show/start/attempt/hint/status plus the
+bound bridge_eval/bridge_move/bridge_ai commands) or imported as a library.
 """
 
 import argparse
@@ -32,11 +32,13 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import chess
 
+from coach import cmd_evaluate_user
 from common import board_from_state
-from engine import parse_move
+from engine import cmd_ai_move, cmd_move, parse_move
 
 # ---------------------------------------------------------------------------
 # Lesson state path (module-level constant so a later slice can bind it in
@@ -538,6 +540,24 @@ def cmd_start(args) -> dict:
     }
 
 
+def _bound_lesson_state_args(**kwargs) -> SimpleNamespace:
+    """Construct upstream command arguments with the lesson state fixed in
+    code, so bridge callers can supply a move but never a mutable state path."""
+    return SimpleNamespace(state=os.path.expanduser(LESSON_STATE_PATH), **kwargs)
+
+
+def cmd_bridge_eval(args) -> dict:
+    return cmd_evaluate_user(_bound_lesson_state_args(move=args.move))
+
+
+def cmd_bridge_move(args) -> dict:
+    return cmd_move(_bound_lesson_state_args(move=args.move))
+
+
+def cmd_bridge_ai(args) -> dict:
+    return cmd_ai_move(_bound_lesson_state_args())
+
+
 def _load_lesson_state(path: str) -> dict:
     with open(path) as f:
         return json.load(f)
@@ -863,6 +883,20 @@ def cmd_status(args) -> dict:
     if os.path.exists(args.state):
         state = _load_lesson_state(args.state)
         lesson_block = state.get("lesson")
+        # Bridge objectives are evaluated only by status, never attempt: the
+        # recorded bridge move count lives in the shared game-state superset.
+        if (
+            lesson_block
+            and lesson_block.get("result") is None
+            and lesson_block["definition"]["objective"].get("type") == "free_play"
+            and len(state["moves_uci"]) >= lesson_block["definition"]["objective"]["min_moves"]
+        ):
+            lesson_block["result"] = "solved"
+            definition = lesson_block["definition"]
+            _record_completion(
+                definition["id"], lesson_block["attempts_used"], lesson_block["hints_used"]
+            )
+            _save_lesson_state(state, args.state)
         if lesson_block and lesson_block.get("result") is None:
             definition = lesson_block["definition"]
             board = board_from_state(state)
@@ -924,6 +958,14 @@ def main():
     hi = sub.add_parser("hint")
     hi.add_argument("--state", default=LESSON_STATE_PATH)
 
+    be = sub.add_parser("bridge_eval")
+    be.add_argument("--move", required=True)
+
+    bm = sub.add_parser("bridge_move")
+    bm.add_argument("--move", required=True)
+
+    sub.add_parser("bridge_ai")
+
     args = p.parse_args()
     if not args.command:
         p.print_help()
@@ -942,6 +984,8 @@ def main():
     dispatch = {
         "list": cmd_list, "show": cmd_show, "start": cmd_start,
         "attempt": cmd_attempt, "status": cmd_status, "hint": cmd_hint,
+        "bridge_eval": cmd_bridge_eval, "bridge_move": cmd_bridge_move,
+        "bridge_ai": cmd_bridge_ai,
     }
     result = dispatch[args.command](args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
