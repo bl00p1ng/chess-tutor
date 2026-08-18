@@ -657,10 +657,78 @@ def _attempt_move(state: dict, lesson_block: dict, definition: dict, objective: 
     return response
 
 
+def _parse_squares(squares_arg: str) -> tuple:
+    """Parse a comma-separated square list ("d5,e5,f6") into a set of
+    chess square indices. Returns (squares, error) — mirroring parse_move's
+    (move, err) convention — so a malformed square name is reported
+    instead of raising and crashing the CLI."""
+    squares = set()
+    for token in squares_arg.split(","):
+        name = token.strip()
+        if not name:
+            continue
+        try:
+            squares.add(chess.parse_square(name))
+        except ValueError:
+            return None, f"'{name}' is not a valid square name."
+    return squares, None
+
+
+def _attempt_quiz(state: dict, lesson_block: dict, definition: dict, objective: dict,
+                   board_before: "chess.Board", answered_squares: set, state_path: str) -> dict:
+    """Evaluate a legal_moves_from_square quiz submission (task 4b.9). The
+    quiz has its OWN budget model, distinct from a move-type attempt:
+    every submission — right or wrong — consumes ONE unit of attempts_used
+    directly. No moves_used, no D2 rebase, no idle-king guard, no position
+    reset — no chess move is made, only an answer over the unchanged
+    position. Design's detail contract: full square sets are disclosed
+    only on a terminal result (solved/failed) — never mid-quiz, so the
+    checker's own counts-only detail is left untouched and the sets are
+    attached here, gated on the terminal branch alone."""
+    satisfied, detail = check_legal_moves_from_square(
+        objective, board_before=board_before, answered_squares=answered_squares,
+    )
+
+    max_attempts = definition["max_attempts"]
+    response = {
+        "ok": True, "accepted": True,
+        "detail": detail, "goal": definition["goal"],
+        "fen": board_before.fen(),
+    }
+
+    if satisfied:
+        lesson_block["result"] = "solved"
+        response["result"] = "solved"
+        response["success_text"] = definition["success_text"]
+        _record_completion(definition["id"], lesson_block["attempts_used"], lesson_block["hints_used"])
+    else:
+        lesson_block["attempts_used"] += 1
+        if lesson_block["attempts_used"] >= max_attempts:
+            lesson_block["result"] = "failed"
+            response["result"] = "failed"
+            response["solution_text"] = definition["solution_text"]
+            response["failure_text"] = definition["failure_text"]
+        else:
+            response["result"] = "in_progress"
+
+    if response["result"] in ("solved", "failed"):
+        target = chess.parse_square(objective["square"])
+        legal = {m.to_square for m in board_before.legal_moves if m.from_square == target}
+        detail["legal_squares"] = sorted(chess.square_name(sq) for sq in legal)
+        detail["answered_squares"] = sorted(chess.square_name(sq) for sq in answered_squares)
+
+    response["attempts_used"] = lesson_block["attempts_used"]
+    response["attempts_remaining"] = max(0, max_attempts - lesson_block["attempts_used"])
+
+    _save_lesson_state(state, state_path)
+    return response
+
+
 def cmd_attempt(args) -> dict:
     """Reject-before-dispatch gate (tasks 4b.1/4b.2 — adjudication #1's
-    dispatch boundary), then the accept path (task 4b.7): predicate
-    dispatch, D2 post-move rebase with the idle-king legality guard,
+    dispatch boundary), then the accept path: predicate dispatch (task
+    4b.7, move-type predicates; task 4b.9, the legal_moves_from_square
+    quiz), D2 post-move rebase with the idle-king legality guard,
     move/attempt budgets, reset-on-exhaustion, and the solved branch."""
     refusal = _refuse_game_state_path(args.state)
     if refusal:
@@ -674,6 +742,8 @@ def cmd_attempt(args) -> dict:
 
     # Adjudication #1: attempt dispatches PREDICATES only, and never a
     # bridge objective (spec: "Attempt does not evaluate bridge objectives").
+    # This check stays ahead of every predicate reference below, including
+    # the quiz arg-kind check that follows.
     if obj_type in BRIDGE_OBJECTIVES:
         return {
             "ok": True, "accepted": False,
@@ -682,21 +752,44 @@ def cmd_attempt(args) -> dict:
                 "Use the bridge commands to play moves instead."
             ),
         }
-    # legal_moves_from_square is a genuine PREDICATES member, but its
-    # --squares quiz dispatch is a separate arg shape deferred to a later
-    # slice (tracked task 4b.9) — say so distinctly, never silently accept.
+    # legal_moves_from_square is a genuine PREDICATES member, dispatched
+    # through --squares rather than --move (task 4b.9). A --move (or no
+    # answer at all) submitted here is an arg-kind mismatch, not a move to
+    # evaluate — reject cleanly, wording distinct from the bridge redirect.
     if obj_type == "legal_moves_from_square":
-        return {
-            "ok": True, "accepted": False,
-            "reason": "The squares quiz for this lesson is not available through attempt yet.",
-        }
+        squares_arg = getattr(args, "squares", None)
+        if not squares_arg:
+            return {
+                "ok": True, "accepted": False,
+                "reason": (
+                    "This lesson is a squares quiz — answer it with the "
+                    "square names, not a chess move."
+                ),
+            }
+        answered_squares, parse_err = _parse_squares(squares_arg)
+        if parse_err:
+            return {"ok": False, "error": parse_err}
+        board_before = board_from_state(state)
+        return _attempt_quiz(state, lesson_block, definition, objective,
+                              board_before, answered_squares, args.state)
     if obj_type not in PREDICATES:
         # Fail-closed: validate_lesson should already refuse this at load
         # time; this is the defensive last line inside attempt itself.
         return {"ok": False, "error": f"Objective type '{obj_type}' is not a recognized predicate."}
 
+    # Every remaining PREDICATES member is move-type. A --squares answer
+    # (or a missing --move) is the mirror arg-kind mismatch — reject
+    # cleanly rather than crash on a None move (args carries no .move
+    # attribute at all when only --squares was given).
+    move_arg = getattr(args, "move", None)
+    if not move_arg:
+        return {
+            "ok": True, "accepted": False,
+            "reason": "This lesson expects a chess move, not a list of squares.",
+        }
+
     board_before = board_from_state(state)
-    move, err = parse_move(args.move, board_before)
+    move, err = parse_move(move_arg, board_before)
     if err:
         # Chess-illegal move: rejected BEFORE predicate dispatch, no budget
         # consumed (spec scenario: Illegal move).
@@ -806,7 +899,8 @@ def main():
     st.add_argument("--user-dir",    default=USER_LESSONS_DIR_DEFAULT)
 
     at = sub.add_parser("attempt")
-    at.add_argument("--move",  required=True)
+    at.add_argument("--move")
+    at.add_argument("--squares")
     at.add_argument("--state", default=LESSON_STATE_PATH)
 
     su = sub.add_parser("status")

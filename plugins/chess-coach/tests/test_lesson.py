@@ -964,3 +964,151 @@ def test_hint_refuses_game_state_path(tmp_path, monkeypatch):
 
     assert result["ok"] is False
     assert "in-progress game" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# 4b-iv (task 4b.9) — attempt's legal_moves_from_square quiz dispatch via
+# --squares. Bidirectional arg-kind mismatch: a --move submitted to a quiz
+# lesson (test_attempt_quiz_type_dispatch_deferred, above — UNCHANGED, its
+# wording just changed under the hood) and a --squares submitted to a
+# move-type lesson (below) must both fail cleanly, never crash. The quiz
+# has its OWN budget model: every submission consumes attempts_used
+# directly, no moves_used, no D2 rebase, no position_reset. Design's
+# detail contract: full square sets disclosed only on a terminal result
+# (solved/failed) — never mid-quiz.
+# ---------------------------------------------------------------------------
+def test_attempt_quiz_exact_match_solved(tmp_path, monkeypatch):
+    """attempt's real legal_moves_from_square dispatch: the exact
+    legal-destination set, submitted via --squares, solves the lesson
+    identically to a move-type solve — completion recorded into
+    learning.json, no separate command. Terminal result discloses the
+    full square sets (design's detail contract)."""
+    home = tmp_path / "home"
+    (home / ".chess_coach").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    lesson = make_lesson(objective={"type": "legal_moves_from_square", "square": "d5"})
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state, name="quiz_solved.json")
+
+    board = chess.Board(KNIGHT_D5_FEN)
+    legal_names = {chess.square_name(m.to_square) for m in board.legal_moves if m.from_square == chess.D5}
+
+    result = cmd_attempt(SimpleNamespace(squares=",".join(sorted(legal_names)), state=state_path))
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["result"] == "solved"
+    assert set(result["detail"]["legal_squares"]) == legal_names
+    assert set(result["detail"]["answered_squares"]) == legal_names
+    with open(home / ".chess_coach" / "learning.json") as f:
+        learning = json.load(f)
+    assert "knight-tour-1" in learning["completed"]
+    assert learning["last_lesson_id"] == "knight-tour-1"
+
+
+def test_attempt_quiz_wrong_answer_consumes_attempt_budget(tmp_path):
+    """Spec scenario 'Wrong quiz answer', proven through attempt's real
+    dispatch: a subset answer is not satisfied and consumes ONE unit of
+    the quiz's OWN attempt budget directly — no moves_used, no D2 rebase,
+    no position_reset, since no chess move is made; the answer sets stay
+    undisclosed while still in_progress (never leak mid-quiz). Fused
+    triangulation: once attempts are also exhausted, the drill terminates
+    as failed, echoes solution_text, and NOW discloses the full sets."""
+    # Scenario 1: wrong answer, attempts remain -> in_progress, no leak.
+    lesson = make_lesson(
+        objective={"type": "legal_moves_from_square", "square": "d5"},
+        max_attempts=2,
+    )
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state, name="quiz_wrong.json")
+
+    result = cmd_attempt(SimpleNamespace(squares="f6,b4", state=state_path))  # missing 6 of 8
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["result"] == "in_progress"
+    assert result["detail"]["missing_count"] == 6
+    assert "legal_squares" not in result["detail"]
+    with open(state_path) as f:
+        saved = json.load(f)
+    assert saved["lesson"]["attempts_used"] == 1
+    assert saved["lesson"]["moves_used"] == 0
+    assert saved["start_fen"] == KNIGHT_D5_FEN  # untouched — no reset for a quiz
+    assert saved["moves_uci"] == []             # untouched — no move was made
+
+    # Scenario 2: attempts also exhausted -> terminal failed, sets disclosed.
+    terminal_lesson = make_lesson(
+        id="knight-tour-quiz-terminal",
+        objective={"type": "legal_moves_from_square", "square": "d5"},
+        max_attempts=1,
+    )
+    terminal_state = make_lesson_state(terminal_lesson)
+    terminal_path = write_state_file(tmp_path, terminal_state, name="quiz_failed.json")
+
+    terminal_result = cmd_attempt(SimpleNamespace(squares="f6,b4", state=terminal_path))
+
+    assert terminal_result["result"] == "failed"
+    assert terminal_result["solution_text"] == terminal_lesson["solution_text"]
+    assert "legal_squares" in terminal_result["detail"]
+    assert "answered_squares" in terminal_result["detail"]
+    with open(terminal_path) as f:
+        terminal_saved = json.load(f)
+    assert terminal_saved["lesson"]["result"] == "failed"
+
+
+def test_attempt_quiz_superset_answer_not_satisfied(tmp_path):
+    """Exact-set rule proven through attempt's real dispatch, not just the
+    predicate checker (4a2): every correct destination plus one illegal
+    extra square must NOT be satisfied — a superset is rejected exactly
+    like a subset, order-insensitive, never a partial-credit pass; still
+    in_progress here (first attempt, budget remains), so no leak either."""
+    lesson = make_lesson(objective={"type": "legal_moves_from_square", "square": "d5"})
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state, name="quiz_superset.json")
+
+    board = chess.Board(KNIGHT_D5_FEN)
+    legal_names = {chess.square_name(m.to_square) for m in board.legal_moves if m.from_square == chess.D5}
+    superset_csv = ",".join(sorted(legal_names) + ["a1"])
+
+    result = cmd_attempt(SimpleNamespace(squares=superset_csv, state=state_path))
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["result"] == "in_progress"
+    assert result["detail"]["extra_count"] == 1
+    assert result["detail"]["missing_count"] == 0
+    assert "legal_squares" not in result["detail"]
+
+
+def test_attempt_squares_given_for_move_type_lesson_rejected(tmp_path):
+    """Bidirectional arg-kind mismatch, the other direction: a --squares
+    answer submitted to a move-type predicate lesson must fail cleanly —
+    not crash on a missing --move (this SimpleNamespace carries no .move
+    attribute at all, mirroring a real argparse call that never set it)."""
+    lesson = make_lesson()  # reach_square, not a quiz
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state, name="wrong_arg_kind.json")
+
+    result = cmd_attempt(SimpleNamespace(squares="f6", state=state_path))
+
+    assert result["ok"] is True
+    assert result["accepted"] is False
+    assert result["reason"]
+    with open(state_path) as f:
+        saved = json.load(f)
+    assert saved["lesson"]["moves_used"] == 0
+
+
+def test_attempt_quiz_invalid_square_name_fails_cleanly(tmp_path):
+    """_parse_squares fails cleanly (ok:false), not a crash, on a malformed
+    square token — mirrors parse_move's (value, err) convention rather than
+    letting chess.parse_square's ValueError propagate uncaught."""
+    lesson = make_lesson(objective={"type": "legal_moves_from_square", "square": "d5"})
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state, name="bad_square.json")
+
+    result = cmd_attempt(SimpleNamespace(squares="z9", state=state_path))
+
+    assert result["ok"] is False
+    assert result["error"]
