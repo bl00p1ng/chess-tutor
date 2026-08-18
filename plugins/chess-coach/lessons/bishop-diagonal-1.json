@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "bishop-diagonal-1",
+  "stage": "board-and-pieces",
+  "order": 3,
+  "title": "Practice the bishop's diagonal move.",
+  "goal": "Move your bishop from the square c1 to the square g5 in one move.",
+  "narration_seed": "Bishops travel along diagonals and stay on one color of squares.",
+  "start_fen": "4k3/8/8/8/8/8/8/2B1K3 w - - 0 1",
+  "player_color": "white",
+  "objective": {
+    "type": "reach_square",
+    "square": "g5",
+    "piece": "B",
+    "max_moves": 1
+  },
+  "allowed_pieces": ["B"],
+  "max_attempts": 3,
+  "hints": [
+    "Move the bishop along the clear diagonal that rises to the right from the square c1."
+  ],
+  "solution_text": [
+    "Move your bishop from the square c1 to the square g5."
+  ],
+  "solution_san": ["Bg5"],
+  "success_text": "You placed your bishop on the square g5.",
+  "failure_text": "Keep your bishop on the diagonal that begins at the square c1."
+}

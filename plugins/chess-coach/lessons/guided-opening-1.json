@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "guided-opening-1",
+  "stage": "guided-play",
+  "order": 1,
+  "title": "Play a guided first exchange.",
+  "goal": "Play one safe first move and observe the coach's reply.",
+  "narration_seed": "A guided first exchange helps you place a piece near the middle of the board and keep your pieces protected.",
+  "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+  "player_color": "white",
+  "objective": {
+    "type": "free_play",
+    "min_moves": 2
+  },
+  "allowed_pieces": ["P", "N", "B", "R", "Q", "K"],
+  "max_attempts": 1,
+  "hints": [
+    "Choose a move allowed by the rules that brings a piece into play or helps control the middle of the board."
+  ],
+  "solution_text": [
+    "There is no single solution; choose a safe first move and learn from the coach's reply."
+  ],
+  "solution_san": [],
+  "success_text": "You completed a guided first exchange with the coach.",
+  "failure_text": "Continue the guided first exchange until the coach has replied."
+}

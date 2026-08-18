@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "pawn-advance-1",
+  "stage": "board-and-pieces",
+  "order": 1,
+  "title": "Practice the pawn's first move.",
+  "goal": "Move your pawn from the square e2 to the square e4 in one move.",
+  "narration_seed": "Pawns move forward and can take a longer first step.",
+  "start_fen": "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1",
+  "player_color": "white",
+  "objective": {
+    "type": "reach_square",
+    "square": "e4",
+    "piece": "P",
+    "max_moves": 1
+  },
+  "allowed_pieces": ["P"],
+  "max_attempts": 3,
+  "hints": [
+    "A pawn may move two squares forward on its first move when the path is clear."
+  ],
+  "solution_text": [
+    "Move your pawn from the square e2 to the square e4."
+  ],
+  "solution_san": ["e4"],
+  "success_text": "You advanced your pawn to the square e4.",
+  "failure_text": "Try moving the pawn straight forward from the square e2."
+}

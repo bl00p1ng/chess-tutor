@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "knight-jump-1",
+  "stage": "board-and-pieces",
+  "order": 2,
+  "title": "Practice the knight's L-shaped move.",
+  "goal": "Move your knight from the square d5 to the square f6 in one move.",
+  "narration_seed": "Knights travel in an L-shape and can jump over pieces.",
+  "start_fen": "4k3/8/8/3N4/8/8/8/4K3 w - - 0 1",
+  "player_color": "white",
+  "objective": {
+    "type": "reach_square",
+    "square": "f6",
+    "piece": "N",
+    "max_moves": 1
+  },
+  "allowed_pieces": ["N"],
+  "max_attempts": 3,
+  "hints": [
+    "For the knight, count two squares in one direction, then one square sideways."
+  ],
+  "solution_text": [
+    "Move your knight from the square d5 to the square f6."
+  ],
+  "solution_san": ["Nf6"],
+  "success_text": "You landed your knight on the square f6.",
+  "failure_text": "Trace an L-shape from the square d5 before you move."
+}

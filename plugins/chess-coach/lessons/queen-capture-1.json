@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "queen-capture-1",
+  "stage": "material-and-mate",
+  "order": 1,
+  "title": "Practice the queen's long-range move.",
+  "goal": "Capture the opposing pawn on the square d5 with your queen.",
+  "narration_seed": "A queen moves in straight lines like a rook or slanting lines like a bishop.",
+  "start_fen": "4k3/8/8/3p4/8/8/8/3QK3 w - - 0 1",
+  "player_color": "white",
+  "objective": {
+    "type": "capture_square",
+    "square": "d5"
+  },
+  "allowed_pieces": ["Q"],
+  "max_attempts": 3,
+  "hints": [
+    "Move the queen straight upward through the empty column from the square d1 to the square d5."
+  ],
+  "solution_text": [
+    "Move your queen from the square d1 to capture on the square d5."
+  ],
+  "solution_san": ["Qxd5"],
+  "success_text": "You used your queen to capture on the square d5.",
+  "failure_text": "Look up the clear vertical column from the square d1."
+}

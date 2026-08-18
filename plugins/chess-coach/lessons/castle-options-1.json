@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "id": "castle-options-1",
+  "stage": "special-rules",
+  "order": 2,
+  "title": "Move the king two squares toward a rook.",
+  "goal": "Name every square the king may move to from the square e1.",
+  "narration_seed": "Castling is a special move: the king moves two squares toward a rook, then the rook moves beside the king.",
+  "start_fen": "4k3/8/8/8/8/8/8/R3K2R w KQ - 0 1",
+  "player_color": "white",
+  "objective": {
+    "type": "legal_moves_from_square",
+    "square": "e1"
+  },
+  "allowed_pieces": ["K"],
+  "max_attempts": 3,
+  "hints": [
+    "Name each one-square king move and the king's two-square move toward a rook."
+  ],
+  "solution_text": [
+    "Move the king from the square e1 to the square c1.",
+    "Move the king from the square e1 to the square d1.",
+    "Move the king from the square e1 to the square d2.",
+    "Move the king from the square e1 to the square e2.",
+    "Move the king from the square e1 to the square f1.",
+    "Move the king from the square e1 to the square f2.",
+    "Move the king from the square e1 to the square g1."
+  ],
+  "solution_san": ["O-O-O", "Kd1", "Kd2", "Ke2", "Kf1", "Kf2", "O-O"],
+  "success_text": "You identified every square the king may move to from the square e1.",
+  "failure_text": "Trace each one-square king move and the king's two-square move toward a rook."
+}

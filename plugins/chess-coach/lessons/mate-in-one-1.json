@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "mate-in-one-1",
+  "stage": "material-and-mate",
+  "order": 2,
+  "title": "Trap the opposing king in one move.",
+  "goal": "Trap the opposing king in one move.",
+  "narration_seed": "The game ends when the opposing king is under attack and has no way to escape.",
+  "start_fen": "6k1/5ppp/8/8/7r/8/8/R3K2Q w - - 0 1",
+  "player_color": "white",
+  "objective": {
+    "type": "checkmate_in_1"
+  },
+  "allowed_pieces": ["R", "Q"],
+  "max_attempts": 3,
+  "hints": [
+    "Move the rook across the top row so it attacks the opposing king, while the queen covers every escape square."
+  ],
+  "solution_text": [
+    "Move your rook from the square a1 to the square a8 to trap the black king with no escape."
+  ],
+  "solution_san": ["Ra8#"],
+  "success_text": "You trapped the opposing king with no escape in one move.",
+  "failure_text": "Look for a rook move that attacks the king and removes every escape square."
+}

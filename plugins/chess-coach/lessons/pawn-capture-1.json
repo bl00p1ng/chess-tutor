@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "pawn-capture-1",
+  "stage": "special-rules",
+  "order": 1,
+  "title": "Learn how pawns capture.",
+  "goal": "Capture the opposing pawn on the square d5 with your pawn.",
+  "narration_seed": "Pawns capture one square diagonally forward instead of moving straight ahead.",
+  "start_fen": "4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1",
+  "player_color": "white",
+  "objective": {
+    "type": "capture_square",
+    "square": "d5"
+  },
+  "allowed_pieces": ["P"],
+  "max_attempts": 3,
+  "hints": [
+    "Your pawn can capture diagonally from the square e4 to the square d5."
+  ],
+  "solution_text": [
+    "Capture the opposing pawn by moving from the square e4 to the square d5."
+  ],
+  "solution_san": ["exd5"],
+  "success_text": "You captured the opposing pawn on the square d5.",
+  "failure_text": "Look for the diagonal capture from the square e4."
+}

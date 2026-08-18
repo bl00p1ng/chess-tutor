@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "guided-opening-2",
+  "stage": "guided-play",
+  "order": 2,
+  "title": "Plan your first two moves with the coach.",
+  "goal": "Play two thoughtful moves against the coach while protecting your pieces.",
+  "narration_seed": "Use your first moves to bring pieces into play before trying to attack.",
+  "start_fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+  "player_color": "white",
+  "objective": {
+    "type": "free_play",
+    "min_moves": 4
+  },
+  "allowed_pieces": ["P", "N", "B", "R", "Q", "K"],
+  "max_attempts": 1,
+  "hints": [
+    "Before each move, ask whether the piece you move will still be protected."
+  ],
+  "solution_text": [
+    "There is no single solution; bring your pieces into play and respond to the coach's moves."
+  ],
+  "solution_san": [],
+  "success_text": "You completed a longer guided plan for your first moves with the coach.",
+  "failure_text": "Continue the guided plan until you have played two thoughtful moves."
+}
