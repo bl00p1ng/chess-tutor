@@ -216,4 +216,6 @@ PRs welcome!
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+This project is a fork of [yongqyu/claude-chess](https://github.com/yongqyu/claude-chess). Upstream's README states MIT, but upstream does not publish a `LICENSE` file. This fork adds one, crediting the original author.
