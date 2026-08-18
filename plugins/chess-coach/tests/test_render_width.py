@@ -1,10 +1,18 @@
 import os
 import sys
 
+import chess
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from render import (
     visible_width, effective_width, wrap_move_pairs, render_moves, render_winbar,
+    render_status, plain_render,
 )
+
+# Black king on e8, White queen on e1, open e-file: Black to move, in check.
+# A minimal synthetic position (not a real game) used only to exercise the
+# CHECK! indicator independently of move-history/board-square fixtures.
+CHECK_FEN = "4k3/8/8/8/8/8/8/4Q1K1 b - - 0 1"
 
 
 def test_visible_width_strips_ansi_before_measuring():
@@ -104,3 +112,98 @@ def test_render_winbar_within_bound():
     bar_blocks_floor = at_floor.count("█") + at_floor.count("░")
     assert bar_blocks_floor == 19
     assert visible_width(at_floor) == 40
+
+
+def test_render_status_stacks_long_opening():
+    """A status carrying level/mode/playing plus the longest bundled
+    opening name and a check indicator cannot fit on one line at width
+    50, so render_status stacks onto three lines matching the D5
+    worst-case bound exactly: L1=26 (turn+check), L2=38 (level+playing),
+    L3=44 (mode+opening, longest OPENINGS name = 27 chars)."""
+    board = chess.Board(CHECK_FEN)
+    state = {
+        "level": "intermediate", "mode": "lesson", "color": "white",
+        "opening": "Ruy López (Spanish Opening)",
+    }
+    result = render_status(board, state, width=50)
+    lines = result.split("\n")
+    assert len(lines) == 3
+    for line in lines:
+        assert visible_width(line) <= 50
+    assert visible_width(lines[0]) == 26
+    assert visible_width(lines[1]) == 38
+    assert visible_width(lines[2]) == 44
+    assert "CHECK!" in lines[0]
+    assert "Black to move" in lines[0]
+    assert "Level: Intermediate" in lines[1]
+    assert "Playing: White" in lines[1]
+    assert "Mode: Lesson" in lines[2]
+    assert "Ruy López (Spanish Opening)" in lines[2]  # fits untruncated at width 50
+
+
+def test_render_status_truncates_opening_at_narrower_width():
+    """At the width floor (40), the same L3 (44 visible cols at width 50)
+    no longer fits, so the opening name is truncated with an ellipsis —
+    proving truncation is driven by `width`, not a fixed constant."""
+    board = chess.Board(CHECK_FEN)
+    state = {
+        "level": "intermediate", "mode": "lesson", "color": "white",
+        "opening": "Ruy López (Spanish Opening)",
+    }
+    result = render_status(board, state, width=40)
+    lines = result.split("\n")
+    assert len(lines) == 3
+    for line in lines:
+        assert visible_width(line) <= 40
+    assert "…" in lines[2]
+    assert "Ruy López (Spanish Opening)" not in lines[2]  # truncated, not dropped
+    assert "Mode: Lesson" in lines[2]
+
+
+def test_render_status_single_line_when_it_fits():
+    """A width wide enough for the full status keeps it on a single
+    line — proving the fits-check is real conditional logic, not an
+    always-stack fake."""
+    board = chess.Board()  # standard start: White to move, no check
+    state = {"level": "beginner", "mode": "play", "color": "white"}
+    result = render_status(board, state, width=100)
+    assert "\n" not in result
+    assert visible_width(result) <= 100
+    assert "White to move" in result
+    assert "Level: Beginner" in result
+    assert "Mode: Play" in result
+    assert "Playing: White" in result
+
+
+def test_plain_render_bounded():
+    """plain_render is the chat-facing path; it must delegate to the
+    shared width-aware render_moves/render_status (F8) instead of
+    duplicating unbounded inline formatting. Every emitted line stays
+    within the requested width, including a long move history, a long
+    opening name, and a check indicator — none of which the old
+    duplicated inline code bounded at all."""
+    state = {
+        "start_fen": CHECK_FEN,
+        "moves_uci": [],
+        "moves_san": ["e4", "e5"] * 10,  # 10 pairs — forces wrapping (3a-proven)
+        "level": "intermediate",
+        "mode": "lesson",
+        "color": "white",
+        "opening": "Ruy López (Spanish Opening)",
+        "move_records": [
+            {"winrate_white": 0.5, "coaching": "Line one.\nLine two."}
+        ],
+    }
+    result = plain_render(state, width=40)
+    lines = result.split("\n")
+    assert lines  # non-empty — production code actually ran
+    for line in lines:
+        assert visible_width(line) <= 40
+
+    assert "CHECK!" in result
+    assert "…" in result  # long opening name truncated to fit width 40
+
+    sep_lines = [line for line in lines if line.strip() and set(line.strip()) == {"─"}]
+    assert sep_lines, "expected a coaching separator line"
+    for sep_line in sep_lines:
+        assert visible_width(sep_line) == 40  # width-2 dashes + 2-col indent = width exactly

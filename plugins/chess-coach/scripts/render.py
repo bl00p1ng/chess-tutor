@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import unicodedata
 
@@ -106,6 +107,21 @@ def visible_width(s: str) -> int:
 
 def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, value))
+
+
+def _truncate_to_width(s: str, width: int) -> str:
+    """Truncate s (ANSI-stripped) to at most `width` visible columns."""
+    if width <= 0:
+        return ""
+    out: list[str] = []
+    total = 0
+    for ch in _ANSI_RE.sub("", s):
+        w = _char_width(ch)
+        if total + w > width:
+            break
+        out.append(ch)
+        total += w
+    return "".join(out)
 
 
 def effective_width(requested: int) -> int:
@@ -200,10 +216,16 @@ def render_winbar(winrate_white: float, width: int = 50) -> str:
     )
 
 
-def render_moves(moves_san: list[str], width: int = 50, max_pairs: int = 8) -> str:
-    """Return formatted move history (PGN-style pairs), wrapped to width."""
+def render_moves(moves_san: list[str], width: int = 50, max_pairs: int = 8,
+                  ansi: bool = True) -> str:
+    """Return formatted move history (PGN-style pairs), wrapped to width.
+
+    ansi=True colors move numbers/white moves/black moves; ansi=False
+    returns the identical visible text with no escape codes, so callers
+    like plain_render can delegate instead of duplicating this logic (F8).
+    """
     if not moves_san:
-        return f"  {FG_GRAY}(no moves yet){RESET}"
+        return f"  {FG_GRAY}(no moves yet){RESET}" if ansi else "  (no moves yet)"
 
     plain_pairs   = []
     colored_pairs = []
@@ -216,18 +238,18 @@ def render_moves(moves_san: list[str], width: int = 50, max_pairs: int = 8) -> s
             f"{FG_GRAY}{n}.{RESET}{FG_WHITE}{white_m}{RESET} {FG_GRAY}{black_m}{RESET}"
         )
 
-    shown_plain   = plain_pairs[-max_pairs:]
-    shown_colored = colored_pairs[-max_pairs:]
+    shown_plain  = plain_pairs[-max_pairs:]
+    shown_output = (colored_pairs if ansi else plain_pairs)[-max_pairs:]
     if len(plain_pairs) > max_pairs:
-        shown_plain   = ["..."] + shown_plain
-        shown_colored = [f"{FG_GRAY}...{RESET}"] + shown_colored
+        shown_plain  = ["..."] + shown_plain
+        shown_output = [(f"{FG_GRAY}...{RESET}" if ansi else "...")] + shown_output
 
     groups = wrap_move_pairs(shown_plain, width)
     lines  = []
     cursor = 0
     for group in groups:
         n = len(group)
-        lines.append("  " + "   ".join(shown_colored[cursor:cursor + n]))
+        lines.append("  " + "   ".join(shown_output[cursor:cursor + n]))
         cursor += n
     return "\n".join(lines)
 
@@ -238,29 +260,72 @@ def render_coaching(coaching: str) -> str:
     return "\n".join(f"  {FG_YEL}{line}{RESET}" for line in lines)
 
 
-def render_status(board: chess.Board, state: dict) -> str:
-    """Return the bottom status bar."""
-    turn     = "⬜ White to move" if board.turn == chess.WHITE else "⬛ Black to move"
-    level    = state.get("level", "?").capitalize()
-    mode     = state.get("mode",  "?").capitalize()
-    color    = state.get("color", "?").capitalize()
-    opening  = state.get("opening", "")
-    check    = f"  {FG_RED}{BOLD}CHECK!{RESET}" if board.is_check() else ""
-    opening_str = f"  {FG_GRAY}│  {opening}{RESET}" if opening else ""
-    return (
-        f"  {BOLD}{FG_CYAN}{turn}{RESET}{check}"
-        f"  {FG_GRAY}│  Level: {level}  │  Mode: {mode}  │  Playing: {color}{RESET}"
-        f"{opening_str}"
-    )
+def render_status(board: chess.Board, state: dict, width: int = 50,
+                   ansi: bool = True) -> str:
+    """Return the bottom status bar.
+
+    Renders as a single line when it fits within `width` visible columns;
+    otherwise stacks onto three lines — turn+check / level+playing /
+    mode+opening (D5). The opening name is truncated with an ellipsis so
+    the mode+opening line never exceeds `width`. ansi=False returns the
+    identical visible text with no escape codes (F8, plain path).
+    """
+    turn_icon = "⬜" if board.turn == chess.WHITE else "⬛"
+    turn_txt  = "White to move" if board.turn == chess.WHITE else "Black to move"
+    level     = state.get("level", "?").capitalize()
+    mode      = state.get("mode",  "?").capitalize()
+    color     = state.get("color", "?").capitalize()
+    opening   = state.get("opening", "")
+    is_check  = board.is_check()
+
+    def wrap(text: str, code: str) -> str:
+        return f"{code}{text}{RESET}" if ansi else text
+
+    turn_str  = wrap(f"{turn_icon} {turn_txt}", f"{BOLD}{FG_CYAN}")
+    check_str = f"  {wrap('CHECK!', f'{FG_RED}{BOLD}')}" if is_check else ""
+    l1 = f"  {turn_str}{check_str}"
+
+    level_str   = f"Level: {level}"
+    mode_str    = f"Mode: {mode}"
+    playing_str = f"Playing: {color}"
+
+    # Single-line format (existing wide "  │  " spacing) — used only when it fits.
+    tail = wrap(f"│  {level_str}  │  {mode_str}  │  {playing_str}", FG_GRAY)
+    single = f"{l1}  {tail}"
+    if opening:
+        single += f"  {wrap(f'│  {opening}', FG_GRAY)}"
+    if visible_width(single) <= width:
+        return single
+
+    # Stacked format — narrow " │ " spacing to hit the D5 worst-case bounds.
+    l2 = f"  {wrap(f'{level_str} │ {playing_str}', FG_GRAY)}"
+
+    mode_prefix = f"{mode_str} │ "
+    if opening:
+        budget = width - 2 - visible_width(mode_prefix)  # 2 = line indent
+        if visible_width(opening) > budget:
+            opening_disp = _truncate_to_width(opening, max(budget - 1, 0)) + "…"
+        else:
+            opening_disp = opening
+        l3_plain = f"{mode_prefix}{opening_disp}"
+    else:
+        l3_plain = mode_str
+    l3 = f"  {wrap(l3_plain, FG_GRAY)}"
+
+    return "\n".join([l1, l2, l3])
 
 
 # ---------------------------------------------------------------------------
 # Plain (no-ANSI) render — suitable for capturing into chat output
 # ---------------------------------------------------------------------------
-def plain_render(state: dict) -> str:
-    """Return a clean plain-text board with no ANSI codes."""
+def plain_render(state: dict, width: int = 50) -> str:
+    """Return a clean plain-text board with no ANSI codes, bounded to
+    `width` visible columns (D5). This is the chat-facing path the user
+    actually reads, so it delegates move-history and status rendering to
+    the shared width-aware renderers via ansi=False instead of
+    duplicating them (F8).
+    """
     board     = board_from_state(state)
-    moves_uci = state.get("moves_uci", [])
     records   = state.get("move_records", [])
     wr_white  = records[-1]["winrate_white"] if records else 0.5
     coaching  = records[-1].get("coaching") if records else None
@@ -291,33 +356,18 @@ def plain_render(state: dict) -> str:
     lines.append(f"  W {w_pct}%  /  B {b_pct}%")
     lines.append("")
 
-    moves_san = state.get("moves_san", [])
-    if moves_san:
-        pairs = []
-        for i in range(0, len(moves_san), 2):
-            n      = i // 2 + 1
-            white_m = moves_san[i]
-            black_m = moves_san[i + 1] if i + 1 < len(moves_san) else "..."
-            pairs.append(f"{n}. {white_m} {black_m}")
-        shown = pairs[-8:]
-        if len(pairs) > 8:
-            shown = ["..."] + shown
-        lines.append("  " + "   ".join(shown))
-        lines.append("")
+    lines.append(render_moves(state.get("moves_san", []), width=width, ansi=False))
+    lines.append("")
 
     if coaching:
-        lines.append("  " + "─" * 52)
+        sep = "  " + "─" * (width - 2)
+        lines.append(sep)
         for line in coaching.strip().split("\n"):
             lines.append(f"  {line}")
-        lines.append("  " + "─" * 52)
+        lines.append(sep)
         lines.append("")
 
-    turn    = "⬜ White to move" if board.turn == chess.WHITE else "⬛ Black to move"
-    level   = state.get("level", "?").capitalize()
-    mode    = state.get("mode",  "?").capitalize()
-    color   = state.get("color", "?").capitalize()
-    check   = "  CHECK!" if board.is_check() else ""
-    lines.append(f"  {turn}{check}  |  Level: {level}  |  Mode: {mode}  |  Playing: {color}")
+    lines.append(render_status(board, state, width=width, ansi=False))
 
     if board.is_game_over():
         lines.append(f"\n  Game over — Result: {state.get('result', '?')}")
@@ -328,7 +378,7 @@ def plain_render(state: dict) -> str:
 # ---------------------------------------------------------------------------
 # Full render
 # ---------------------------------------------------------------------------
-def full_render(state: dict, do_clear: bool) -> str:
+def full_render(state: dict, do_clear: bool, width: int = 50) -> str:
     board      = board_from_state(state)
     moves_uci  = state.get("moves_uci", [])
     last_uci   = moves_uci[-1] if moves_uci else None
@@ -343,17 +393,17 @@ def full_render(state: dict, do_clear: bool) -> str:
     parts.append(f"\n  {BOLD}{FG_MAG}♟  Chess Coach{RESET}\n")
     parts.append(render_board(board, last_uci))
     parts.append("")
-    parts.append(render_winbar(wr_white))
+    parts.append(render_winbar(wr_white, width=width))
     parts.append("")
-    parts.append(render_moves(state.get("moves_san", [])))
+    parts.append(render_moves(state.get("moves_san", []), width=width))
 
     if coaching:
-        sep = f"  {FG_GRAY}{'─' * 52}{RESET}"
+        sep = f"  {FG_GRAY}{'─' * (width - 2)}{RESET}"
         parts.append(sep)
         parts.append(render_coaching(coaching))
         parts.append(sep)
 
-    parts.append(render_status(board, state))
+    parts.append(render_status(board, state, width=width))
     parts.append("")
 
     if board.is_game_over():
@@ -373,16 +423,27 @@ def main():
                    help="Clear the terminal before rendering (fixed-position effect)")
     p.add_argument("--plain", action="store_true",
                    help="Output plain text with no ANSI codes (for capturing into chat)")
+    p.add_argument("--width", type=int, default=None,
+                   help="Requested terminal width in columns; always routed through "
+                        "effective_width (D5), which clamps to [40, 50] — this flag "
+                        "may only narrow the render below 50, never widen past it. "
+                        "Defaults to the detected terminal width.")
     args = p.parse_args()
     args.state = os.path.expanduser(args.state)
+
+    requested = (
+        args.width if args.width is not None
+        else shutil.get_terminal_size(fallback=(80, 24)).columns
+    )
+    width = effective_width(requested)
 
     with open(args.state) as f:
         state = json.load(f)
 
     if args.plain:
-        output = plain_render(state)
+        output = plain_render(state, width=width)
     else:
-        output = full_render(state, args.clear)
+        output = full_render(state, args.clear, width=width)
     sys.stdout.write(output)
     sys.stdout.flush()
 
