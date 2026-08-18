@@ -6,9 +6,9 @@ This module is a library only in this slice: it defines the two disjoint
 objective registries (PREDICATES, BRIDGE_OBJECTIVES), the deferred-type
 allowlist (DEFERRED_TYPES), and lesson-schema validation (validate_lesson)
 covering required fields, stage validity, FEN/player-color consistency, and
-the stage-constrained two-registry objective-type dispatch. It exposes no
-command-line interface — list/show/start/attempt/hint/status are built on
-top of this library in a later slice.
+the stage-constrained two-registry objective-type dispatch, and — as of
+slice 4b-i — a CLI exposing list/show/start (attempt/hint/status land in
+slice 4b-ii).
 
 Slice 4a2 implemented the four PREDICATES checker bodies, narration
 self-containment, and cross-field FEN/objective occupancy checks. Deferred
@@ -18,11 +18,15 @@ Slice 4a3 implemented load_lesson_file and LessonValidationError below —
 single-file read + validate only, no bundled/user-dir merge (that is
 slice 4b's `list` command).
 
-Imported by that later slice's CLI. Do not run directly.
+Runnable directly as a CLI (list/show/start) or imported as a library.
 """
 
+import argparse
+import glob
 import json
+import os
 import re
+import sys
 
 import chess
 
@@ -346,3 +350,219 @@ def load_lesson_file(path: str) -> dict:
     if errors:
         raise LessonValidationError(errors)
     return lesson
+
+
+# ---------------------------------------------------------------------------
+# CLI surface (slice 4b-i): list / show / start. attempt/hint/status are a
+# later slice (4b-ii) — see design's command-surface table. Every home-
+# relative default below stays an UNEXPANDED string, expanded only at call
+# time (inside main() or the function that reads it) — never baked at
+# import time — so a test's HOME override always takes effect.
+# ---------------------------------------------------------------------------
+GAME_STATE_PATH = "~/.chess_coach/current_game.json"
+LEARNING_STATE_PATH = "~/.chess_coach/learning.json"
+BUNDLED_LESSONS_DIR_DEFAULT = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "lessons")
+)
+USER_LESSONS_DIR_DEFAULT = "~/.chess_coach/lessons"
+
+
+def _refuse_game_state_path(state_path: str) -> dict | None:
+    """D7-E: refuse a --state that resolves to the live game file, however
+    it is spelled (symlink, relative '..' segments, or '~' expansion) —
+    realpath comparison, never a literal string match, so no path form can
+    slip through. A marker key inside the lesson file cannot catch this: an
+    omitted --state means the game file is never opened in the first place."""
+    resolved_state = os.path.realpath(os.path.expanduser(state_path))
+    resolved_game = os.path.realpath(os.path.expanduser(GAME_STATE_PATH))
+    if resolved_state == resolved_game:
+        return {
+            "ok": False,
+            "error": (
+                "Refusing to use the in-progress game file as lesson state. "
+                "Lesson progress and the active game must stay in separate files."
+            ),
+        }
+    return None
+
+
+def load_learning_progress() -> dict:
+    """Read learning.json, defaulting to an empty progress record when the
+    file does not exist yet (first-ever lesson session)."""
+    path = os.path.expanduser(LEARNING_STATE_PATH)
+    if not os.path.exists(path):
+        return {"schema_version": 1, "completed": {}, "last_lesson_id": None}
+    with open(path) as f:
+        return json.load(f)
+
+
+def _curriculum_order(lessons: dict) -> list:
+    """Sort lessons into one global curriculum sequence: stage index first,
+    then in-stage order, then id as a final tiebreaker."""
+    return sorted(
+        lessons.values(),
+        key=lambda l: (STAGES.index(l["stage"]), l["order"], l["id"]),
+    )
+
+
+def _gating_info(ordered: list, completed_ids: set) -> tuple:
+    """Linear progression (F5): the next selectable NEW lesson is the first
+    uncompleted one in curriculum order; every uncompleted lesson AFTER it
+    is locked. Completion — never position alone — decides lock status, so
+    an already-completed lesson is never locked, wherever it falls."""
+    next_index = next(
+        (i for i, lesson in enumerate(ordered) if lesson["id"] not in completed_ids),
+        None,
+    )
+    locks = {
+        lesson["id"]: (
+            lesson["id"] not in completed_ids
+            and next_index is not None
+            and i > next_index
+        )
+        for i, lesson in enumerate(ordered)
+    }
+    next_id = ordered[next_index]["id"] if next_index is not None else None
+    return next_id, locks
+
+
+def _collect_lessons(bundled_dir: str, user_dir: str) -> tuple:
+    """Load every *.json lesson from bundled_dir then user_dir — user wins
+    on id collision (mirrors persona.py's load order). One invalid file is
+    reported, never raised: a single bad lesson must not hide the rest of
+    the curriculum."""
+    lessons: dict = {}
+    invalid: list = []
+    for directory in [bundled_dir, user_dir]:
+        for path in sorted(glob.glob(os.path.join(directory, "*.json"))):
+            try:
+                lesson = load_lesson_file(path)
+            except (LessonValidationError, OSError, json.JSONDecodeError) as e:
+                invalid.append({"file": path, "error": str(e)})
+                continue
+            lessons[lesson["id"]] = lesson
+    return lessons, invalid
+
+
+def cmd_list(args) -> dict:
+    lessons, invalid = _collect_lessons(args.bundled_dir, args.user_dir)
+    completed_ids = set(load_learning_progress().get("completed", {}))
+    ordered = _curriculum_order(lessons)
+    _, locks = _gating_info(ordered, completed_ids)
+    summaries = [
+        {
+            "id": lesson["id"], "stage": lesson["stage"], "order": lesson["order"],
+            "title": lesson["title"], "completed": lesson["id"] in completed_ids,
+            "locked": locks[lesson["id"]],
+        }
+        for lesson in ordered
+    ]
+    return {"ok": True, "lessons": summaries, "invalid": invalid}
+
+
+def cmd_show(args) -> dict:
+    lessons, _ = _collect_lessons(args.bundled_dir, args.user_dir)
+    lesson = lessons.get(args.id)
+    if lesson is None:
+        return {"ok": False, "error": f"Lesson '{args.id}' not found."}
+    return {"ok": True, "lesson": lesson}
+
+
+def _save_lesson_state(state: dict, path: str) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
+
+
+def cmd_start(args) -> dict:
+    refusal = _refuse_game_state_path(args.state)
+    if refusal:
+        return refusal
+
+    lessons, _ = _collect_lessons(args.bundled_dir, args.user_dir)
+    lesson = lessons.get(args.id)
+    if lesson is None:
+        return {"ok": False, "error": f"Lesson '{args.id}' not found."}
+
+    completed_ids = set(load_learning_progress().get("completed", {}))
+    ordered = _curriculum_order(lessons)
+    next_id, locks = _gating_info(ordered, completed_ids)
+    if locks.get(args.id):
+        return {
+            "ok": False,
+            "error": f"Lesson '{args.id}' is locked — complete earlier lessons first.",
+            "next_lesson_id": next_id,
+        }
+
+    board = chess.Board(lesson["start_fen"])
+    learner_color = lesson["player_color"]
+    other_color = "black" if learner_color == "white" else "white"
+    state_path = os.path.expanduser(args.state)
+    state = {
+        "color": learner_color,
+        "player_name": "learner",
+        "players": {learner_color: "learner", other_color: "ai"},
+        "level": "beginner",
+        "mode": "lesson",
+        "moves_uci": [], "moves_san": [], "move_records": [],
+        "move_count": 0, "result": None, "opening": None,
+        "start_fen": lesson["start_fen"],
+        "lesson": {
+            "definition": lesson, "moves_history": [],
+            "moves_used": 0, "attempts_used": 0, "hints_used": 0,
+            "result": None,
+        },
+    }
+    _save_lesson_state(state, state_path)
+
+    return {
+        "ok": True,
+        "lesson_id": lesson["id"], "title": lesson["title"],
+        "stage": lesson["stage"], "goal": lesson["goal"],
+        "narration_seed": lesson["narration_seed"],
+        "fen": board.fen(), "player_color": learner_color,
+        "objective": lesson["objective"],
+        "allowed_pieces": lesson["allowed_pieces"],
+        "max_moves": lesson["objective"].get("max_moves"),
+        "max_attempts": lesson["max_attempts"],
+        "hints_available": len(lesson["hints"]),
+        "state_file": state_path,
+    }
+
+
+def main():
+    p = argparse.ArgumentParser(description="Lesson curriculum CLI")
+    sub = p.add_subparsers(dest="command")
+
+    ls = sub.add_parser("list")
+    ls.add_argument("--bundled-dir", default=BUNDLED_LESSONS_DIR_DEFAULT)
+    ls.add_argument("--user-dir",    default=USER_LESSONS_DIR_DEFAULT)
+
+    sh = sub.add_parser("show")
+    sh.add_argument("--id", required=True)
+    sh.add_argument("--bundled-dir", default=BUNDLED_LESSONS_DIR_DEFAULT)
+    sh.add_argument("--user-dir",    default=USER_LESSONS_DIR_DEFAULT)
+
+    st = sub.add_parser("start")
+    st.add_argument("--id",    required=True)
+    st.add_argument("--state", default=LESSON_STATE_PATH)
+    st.add_argument("--bundled-dir", default=BUNDLED_LESSONS_DIR_DEFAULT)
+    st.add_argument("--user-dir",    default=USER_LESSONS_DIR_DEFAULT)
+
+    args = p.parse_args()
+    if not args.command:
+        p.print_help()
+        sys.exit(1)
+
+    args.bundled_dir = os.path.expanduser(args.bundled_dir)
+    args.user_dir    = os.path.expanduser(args.user_dir)
+    if hasattr(args, "state"):
+        args.state = os.path.expanduser(args.state)
+
+    dispatch = {"list": cmd_list, "show": cmd_show, "start": cmd_start}
+    result = dispatch[args.command](args)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

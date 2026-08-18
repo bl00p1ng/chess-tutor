@@ -16,7 +16,9 @@ in slice 4a3.
 
 import json
 import os
+import subprocess
 import sys
+from types import SimpleNamespace
 
 import chess
 import pytest
@@ -35,6 +37,10 @@ from lesson import (  # noqa: E402
     check_legal_moves_from_square,
     load_lesson_file,
     LessonValidationError,
+    cmd_list,
+    cmd_show,
+    cmd_start,
+    _refuse_game_state_path,
 )
 
 KNIGHT_D5_FEN = "4k3/8/8/3N4/8/8/8/4K3 w - - 0 1"
@@ -460,3 +466,149 @@ def test_load_lesson_file_invalid_raises_with_full_error_list(tmp_path):
     assert len(errors) == 2
     assert any("stage" in e.lower() for e in errors)
     assert any("player_color" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# 4b-i — CLI surface: list / show / start; linear-progression gating (F5).
+# attempt/hint/status are a later slice (4b-ii) — not built here.
+# ---------------------------------------------------------------------------
+def write_lesson_file(directory, **overrides):
+    """Write a make_lesson() fixture (with overrides) to directory/<id>.json."""
+    lesson = make_lesson(**overrides)
+    path = os.path.join(directory, f"{lesson['id']}.json")
+    with open(path, "w") as f:
+        json.dump(lesson, f)
+    return lesson
+
+
+def three_stage_lessons(bundled_dir):
+    """Three same-stage lessons in curriculum order l1 < l2 < l3."""
+    return [write_lesson_file(bundled_dir, id=f"l{i}", order=i) for i in (1, 2, 3)]
+
+
+def set_learning_home(monkeypatch, tmp_path, completed_ids, home_name="home"):
+    """Point HOME at a fresh tmp directory carrying a learning.json marking
+    completed_ids complete — never the real ~/.chess_coach/."""
+    home = tmp_path / home_name
+    (home / ".chess_coach").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    learning = {
+        "schema_version": 1,
+        "completed": {
+            lid: {"completed_at": "2026-01-01", "attempts": 1, "hints_used": 0}
+            for lid in completed_ids
+        },
+        "last_lesson_id": None,
+    }
+    (home / ".chess_coach" / "learning.json").write_text(json.dumps(learning))
+    return home
+
+
+def test_list_locked_flags(tmp_path, monkeypatch):
+    """locked=False for a completed lesson and for the next selectable one;
+    locked=True for anything beyond it (F5)."""
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    three_stage_lessons(str(bundled))
+    set_learning_home(monkeypatch, tmp_path, {"l1"})
+
+    result = cmd_list(SimpleNamespace(bundled_dir=str(bundled), user_dir=str(tmp_path / "user")))
+    by_id = {l["id"]: l for l in result["lessons"]}
+    assert by_id["l1"]["locked"] is False   # completed
+    assert by_id["l2"]["locked"] is False   # next selectable
+    assert by_id["l3"]["locked"] is True    # beyond the next lesson
+
+
+def test_list_locked_flags_completed_out_of_order_stays_unlocked(tmp_path, monkeypatch):
+    """Triangulation: a lesson completed OUT of curriculum order (l2 done,
+    l1 not) must still read as unlocked — completion, not position, decides
+    lock status. A position-only check gets exactly this case wrong."""
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    three_stage_lessons(str(bundled))
+    set_learning_home(monkeypatch, tmp_path, {"l2"}, home_name="home2")
+
+    result = cmd_list(SimpleNamespace(bundled_dir=str(bundled), user_dir=str(tmp_path / "user")))
+    by_id = {l["id"]: l for l in result["lessons"]}
+    assert by_id["l2"]["locked"] is False   # completed, even though out of order
+    assert by_id["l3"]["locked"] is True    # still beyond the first incomplete (l1)
+
+
+def test_show_found_and_not_found(tmp_path):
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    lesson = write_lesson_file(str(bundled), id="l1")
+
+    found = cmd_show(SimpleNamespace(id="l1", bundled_dir=str(bundled), user_dir=str(tmp_path / "user")))
+    assert found["ok"] is True
+    assert found["lesson"] == lesson
+
+    missing = cmd_show(SimpleNamespace(id="nope", bundled_dir=str(bundled), user_dir=str(tmp_path / "user")))
+    assert missing["ok"] is False
+    assert "nope" in missing["error"]
+
+
+def test_start_gates_out_of_order_allows_replay(tmp_path, monkeypatch):
+    """Spec scenarios: 'Linear within stage' (reject lesson 3 while lesson 2
+    is still incomplete, redirect to it) and 'Replay without tracking' (an
+    already-completed lesson stays startable regardless of position)."""
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    three_stage_lessons(str(bundled))
+    set_learning_home(monkeypatch, tmp_path, {"l1"})
+    common = dict(bundled_dir=str(bundled), user_dir=str(tmp_path / "user"),
+                  state=str(tmp_path / "lesson_state.json"))
+
+    out_of_order = cmd_start(SimpleNamespace(id="l3", **common))
+    assert out_of_order["ok"] is False
+    assert out_of_order["next_lesson_id"] == "l2"
+
+    replay = cmd_start(SimpleNamespace(id="l1", **common))
+    assert replay["ok"] is True
+    assert replay["lesson_id"] == "l1"
+
+
+def test_cli_list_runs_via_subprocess(tmp_path):
+    """Real end-to-end CLI proof: argparse + dispatch + main(), not just the
+    cmd_* functions called directly in-process."""
+    bundled = tmp_path / "bundled"
+    bundled.mkdir()
+    three_stage_lessons(str(bundled))
+    home = tmp_path / "home_subprocess"
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home)}
+
+    result = subprocess.run(
+        [sys.executable, os.path.join(SCRIPTS, "lesson.py"), "list",
+         "--bundled-dir", str(bundled), "--user-dir", str(tmp_path / "user")],
+        capture_output=True, text=True, env=env,
+    )
+    out = json.loads(result.stdout)
+    assert out["ok"] is True
+    assert {l["id"] for l in out["lessons"]} == {"l1", "l2", "l3"}
+
+
+def test_state_realpath_refusal(tmp_path, monkeypatch):
+    """D7-E: refuse any --state whose realpath equals the game file's
+    realpath — proven via a non-literal path form (a symlink), not just a
+    literal string match, so a symlink/relative/'~' spelling cannot slip
+    past cmd_start's refusal."""
+    home = tmp_path / "home"
+    (home / ".chess_coach").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    game_path = home / ".chess_coach" / "current_game.json"
+    game_path.write_text("{}")
+
+    sneaky_link = tmp_path / "sneaky.json"     # non-literal path form
+    sneaky_link.symlink_to(game_path)
+
+    result = cmd_start(SimpleNamespace(
+        id="anything", state=str(sneaky_link),
+        bundled_dir=str(tmp_path / "bundled"), user_dir=str(tmp_path / "user"),
+    ))
+    assert result["ok"] is False
+    assert "in-progress game" in result["error"]
+
+    # Negative control: an unrelated path is never refused by this check —
+    # proven directly against the helper (no lesson fixture needed).
+    assert _refuse_game_state_path(str(tmp_path / "lesson_state.json")) is None
