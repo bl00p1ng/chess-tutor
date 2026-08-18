@@ -7,16 +7,11 @@ command dispatch. Every test below imports and calls library functions
 directly (pure-function style, matching test_render_width.py) — there is
 nothing to shell out to yet.
 
-Covers:
-  - PREDICATES / BRIDGE_OBJECTIVES / DEFERRED_TYPES: two disjoint registries
-    plus a deferred allowlist (adjudication #1 — never merge these).
-  - validate_lesson: required fields, stage-constrained objective-type
-    dispatch, narration self-containment (F7), cross-field FEN/objective
-    occupancy checks.
-  - The four PREDICATES checker functions (reach_square, capture_square,
-    checkmate_in_1, legal_moves_from_square).
-  - load_lesson_file: single-file read + validate, no merge/list logic
-    (that is a later slice's CLI concern).
+Covers: PREDICATES/BRIDGE_OBJECTIVES/DEFERRED_TYPES disjointness
+(adjudication #1); validate_lesson required fields, stage-constrained
+dispatch, narration self-containment (F7), cross-field FEN/objective
+occupancy; the four PREDICATES checker functions. load_lesson_file lands
+in slice 4a3.
 """
 
 import os
@@ -33,6 +28,10 @@ from lesson import (  # noqa: E402
     BRIDGE_OBJECTIVES,
     DEFERRED_TYPES,
     validate_lesson,
+    check_reach_square,
+    check_capture_square,
+    check_checkmate_in_1,
+    check_legal_moves_from_square,
 )
 
 KNIGHT_D5_FEN = "4k3/8/8/3N4/8/8/8/4K3 w - - 0 1"
@@ -168,3 +167,201 @@ def test_validate_predicate_type_rejected_in_guided_play():
     errors = validate_lesson(lesson)
     assert errors
     assert any("reach_square" in e and "guided-play" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# 4a2.1a — narration self-containment: bare square coordinates rejected
+# ---------------------------------------------------------------------------
+def test_validate_bare_square_coordinate_rejected():
+    """A naked coordinate like 'e4' (no 'square' before it) fails loudly —
+    the string would be meaningless if copy-pasted into a separate tutor
+    session without board context."""
+    lesson = make_lesson(goal="Move your knight to e4 in three moves.")
+    errors = validate_lesson(lesson)
+    assert errors
+    assert any("goal" in e and "bare square" in e for e in errors)
+
+
+def test_validate_square_phrasing_allows_repeated_square_word():
+    """Near-miss that must NOT be rejected: two coordinates in one field,
+    each properly phrased with its own 'the square', prove the regex does
+    not blanket-reject every bare-looking coordinate — only ones missing
+    the phrasing word directly before them."""
+    lesson = make_lesson(
+        goal="Move your pawn to the square d5 and to the square f6."
+    )
+    assert validate_lesson(lesson) == []
+
+
+# ---------------------------------------------------------------------------
+# 4a2.1b — FEN <-> objective occupancy cross-field checks
+# ---------------------------------------------------------------------------
+def test_validate_capture_square_target_must_hold_opponent_piece():
+    """capture_square's target square must be occupied by an OPPONENT
+    piece in start_fen — an empty or own-piece target is unplayable."""
+    lesson = make_lesson(
+        start_fen="4k3/8/8/8/4P3/8/8/4K3 w - - 0 1",  # d5 is empty
+        objective={"type": "capture_square", "square": "d5"},
+    )
+    errors = validate_lesson(lesson)
+    assert errors
+    assert any("capture_square" in e and "opponent piece" in e for e in errors)
+
+
+def test_validate_reach_square_piece_must_exist_on_board():
+    """reach_square's named piece must actually exist for the learner on
+    start_fen, or the objective can never be satisfied."""
+    lesson = make_lesson(
+        start_fen="4k3/8/8/8/8/8/8/4K3 w - - 0 1",  # no knight anywhere
+        objective={"type": "reach_square", "square": "f6", "piece": "N"},
+    )
+    errors = validate_lesson(lesson)
+    assert errors
+    assert any("reach_square" in e and "no such learner piece" in e for e in errors)
+
+
+def test_validate_legal_moves_square_must_hold_learner_piece():
+    """legal_moves_from_square's square must hold a learner piece — empty
+    or opponent-occupied makes the quiz unanswerable."""
+    lesson = make_lesson(
+        objective={"type": "legal_moves_from_square", "square": "e5"},  # empty
+    )
+    errors = validate_lesson(lesson)
+    assert errors
+    assert any("legal_moves_from_square" in e and "learner piece" in e for e in errors)
+
+
+def test_validate_capture_and_legal_moves_accept_valid_occupancy():
+    """Positive path (triangulation): correctly-occupied targets are
+    accepted, proving the checks read real board state instead of
+    always rejecting."""
+    capture_lesson = make_lesson(
+        start_fen="4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1",  # d5 holds a black pawn
+        objective={"type": "capture_square", "square": "d5"},
+    )
+    assert validate_lesson(capture_lesson) == []
+
+    quiz_lesson = make_lesson(
+        objective={"type": "legal_moves_from_square", "square": "d5"},  # holds the white knight
+    )
+    assert validate_lesson(quiz_lesson) == []
+
+
+# ---------------------------------------------------------------------------
+# 4a2.2 — check_checkmate_in_1 (spec scenario: "Strong move that misses
+# the goal" — engine evaluation is irrelevant, only actual mate counts)
+# ---------------------------------------------------------------------------
+CHECKMATE_FIXTURE_FEN = "6k1/5ppp/8/8/7r/8/8/R3K2Q w - - 0 1"
+
+
+def test_checkmate_in_1_ignores_move_strength():
+    """A move that wins a whole rook (objectively strong by any engine
+    evaluation) but does not deliver mate must NOT be satisfied — this is
+    the entire point of the predicate: strength is irrelevant."""
+    board_before = chess.Board(CHECKMATE_FIXTURE_FEN)
+    strong_move = chess.Move.from_uci("h1h4")  # Qxh4, wins a rook, no check
+    board_after = board_before.copy()
+    board_after.push(strong_move)
+    assert not board_after.is_checkmate()  # fixture sanity
+
+    satisfied, _ = check_checkmate_in_1(
+        {"type": "checkmate_in_1"},
+        board_before=board_before, move=strong_move, board_after=board_after,
+    )
+    assert satisfied is False
+
+
+def test_checkmate_in_1_satisfied_on_actual_mate():
+    """Triangulation: the same fixture, a genuine mating move IS satisfied."""
+    board_before = chess.Board(CHECKMATE_FIXTURE_FEN)
+    mate_move = chess.Move.from_uci("a1a8")  # Ra8#, back-rank mate
+    board_after = board_before.copy()
+    board_after.push(mate_move)
+    assert board_after.is_checkmate()  # fixture sanity
+
+    satisfied, detail = check_checkmate_in_1(
+        {"type": "checkmate_in_1"},
+        board_before=board_before, move=mate_move, board_after=board_after,
+    )
+    assert satisfied is True
+    assert detail["opponent_replies"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 4a2.3 — check_reach_square (spec scenario: "Satisfying move")
+# ---------------------------------------------------------------------------
+def test_reach_square_satisfied():
+    board_before = chess.Board(KNIGHT_D5_FEN)
+    move = chess.Move.from_uci("d5f6")
+    satisfied, detail = check_reach_square(
+        {"type": "reach_square", "square": "f6"},
+        board_before=board_before, move=move,
+    )
+    assert satisfied is True
+    assert detail["reached"] is True
+
+
+def test_reach_square_stale_occupancy_not_satisfied():
+    """Triangulation: a piece already sitting on the target square BEFORE
+    this move must not count — only move.to_square matters, never mere
+    occupancy of the target square."""
+    board_before = chess.Board("3k4/8/5N2/8/8/8/8/4K3 w - - 0 1")  # N already on f6
+    move = chess.Move.from_uci("e1e2")  # unrelated king shuffle
+    satisfied, _ = check_reach_square(
+        {"type": "reach_square", "square": "f6"},
+        board_before=board_before, move=move,
+    )
+    assert satisfied is False
+
+
+# ---------------------------------------------------------------------------
+# 4a2.4 — check_legal_moves_from_square (spec scenario: "Wrong quiz answer")
+# ---------------------------------------------------------------------------
+def test_legal_moves_from_square_wrong_answer():
+    board_before = chess.Board(KNIGHT_D5_FEN)
+    answered = {chess.F6, chess.B4}  # missing 6 of the 8 real destinations
+    satisfied, detail = check_legal_moves_from_square(
+        {"type": "legal_moves_from_square", "square": "d5"},
+        board_before=board_before, answered_squares=answered,
+    )
+    assert satisfied is False
+    assert detail["missing_count"] == 6
+    assert detail["extra_count"] == 0
+
+
+def test_legal_moves_from_square_exact_match_satisfied():
+    """Triangulation: the exact legal-destination set is satisfied."""
+    board_before = chess.Board(KNIGHT_D5_FEN)
+    legal = {m.to_square for m in board_before.legal_moves if m.from_square == chess.D5}
+    satisfied, detail = check_legal_moves_from_square(
+        {"type": "legal_moves_from_square", "square": "d5"},
+        board_before=board_before, answered_squares=legal,
+    )
+    assert satisfied is True
+    assert detail["missing_count"] == 0
+    assert detail["extra_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 4a2.5 — check_capture_square
+# ---------------------------------------------------------------------------
+def test_capture_square_satisfied_on_capture():
+    board_before = chess.Board("4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1")
+    move = chess.Move.from_uci("e4d5")
+    satisfied, detail = check_capture_square(
+        {"type": "capture_square", "square": "d5"},
+        board_before=board_before, move=move,
+    )
+    assert satisfied is True
+    assert detail["captured"] is True
+
+
+def test_capture_square_not_satisfied_non_capture():
+    """Triangulation: a legal, non-capturing move to a different square."""
+    board_before = chess.Board("4k3/8/8/3p4/4P3/8/8/4K3 w - - 0 1")
+    move = chess.Move.from_uci("e1e2")  # king shuffle, no capture
+    satisfied, _ = check_capture_square(
+        {"type": "capture_square", "square": "d5"},
+        board_before=board_before, move=move,
+    )
+    assert satisfied is False

@@ -10,10 +10,9 @@ the stage-constrained two-registry objective-type dispatch. It exposes no
 command-line interface — list/show/start/attempt/hint/status are built on
 top of this library in a later slice.
 
-Deferred to slice 4a2 (review-budget split): real logic for the four
-PREDICATES checkers (currently NotImplementedError stubs — see their
-docstrings), the narration self-containment + cross-field occupancy checks
-in validate_lesson, and the single-file loader.
+Slice 4a2 implemented the four PREDICATES checker bodies, narration
+self-containment, and cross-field FEN/objective occupancy checks. Deferred
+to slice 4a3: the single-file loader (load_lesson_file).
 
 Imported by that later slice's CLI. Do not run directly.
 """
@@ -40,41 +39,65 @@ BRIDGE_STAGE = "guided-play"
 # Verification predicate checks — dispatched by the `attempt` command
 # (slice 4b) via PREDICATES[objective["type"]]. Every checker shares one
 # uniform keyword-only signature so dispatch never needs per-type branching.
-#
-# STUB NOTICE: real check logic is deferred to slice 4a2 (review-budget
-# split — see sdd/learn-mode/apply-progress). Every stub raises
-# NotImplementedError rather than returning a fake verdict: fail LOUD, never
-# silently report a wrong pass/fail. Nothing in this slice calls them yet —
-# the registry-shape test only asserts they are callable, not their result.
 # ---------------------------------------------------------------------------
 def check_reach_square(objective, *, board_before=None, move=None, board_after=None,
                         answered_squares=None, player_color=None):
-    """Stub — implemented in 4a2. Will be satisfied when the learner's MOVE
-    lands the designated piece on the target square (keyed off the move's
-    destination, not mere occupancy)."""
-    raise NotImplementedError("check_reach_square: real check logic lands in slice 4a2")
+    """Satisfied when the MOVE ends on the target square — keyed off
+    move.to_square, never mere occupancy (a piece already sitting there
+    before this move must not count)."""
+    target = chess.parse_square(objective["square"])
+    reached = move is not None and move.to_square == target
+    return reached, {"target_square": objective["square"], "reached": reached}
 
 
 def check_capture_square(objective, *, board_before=None, move=None, board_after=None,
                           answered_squares=None, player_color=None):
-    """Stub — implemented in 4a2. Will be satisfied when the learner's move
-    captures the piece on the target square."""
-    raise NotImplementedError("check_capture_square: real check logic lands in slice 4a2")
+    """Satisfied when the learner's move captures on the target square.
+
+    En passant decision: `target` names the CAPTURING pawn's destination
+    (move.to_square), not the captured pawn's square — those two differ
+    only for en passant (e5xd6 e.p. removes the pawn on d5 but lands on
+    d6). One uniform target-square rule for every capture type, instead
+    of special-casing en passant's offset capture square.
+    """
+    target = chess.parse_square(objective["square"])
+    captured = (
+        board_before is not None and move is not None
+        and move.to_square == target and board_before.is_capture(move)
+    )
+    return captured, {"target_square": objective["square"], "captured": captured}
 
 
 def check_checkmate_in_1(objective, *, board_before=None, move=None, board_after=None,
                           answered_squares=None, player_color=None):
-    """Stub — implemented in 4a2. Will be satisfied only when the position
-    after the learner's move is checkmate, ignoring move strength entirely."""
-    raise NotImplementedError("check_checkmate_in_1: real check logic lands in slice 4a2")
+    """Satisfied ONLY on actual checkmate — move strength is irrelevant.
+    Spec scenario 'Strong move that misses the goal': a materially
+    winning move that fails to mate is NOT satisfied."""
+    mated = board_after is not None and board_after.is_checkmate()
+    detail = {
+        "is_check": bool(board_after is not None and board_after.is_check()),
+        "opponent_replies": (
+            len(list(board_after.legal_moves)) if board_after is not None else None
+        ),
+    }
+    return mated, detail
 
 
 def check_legal_moves_from_square(objective, *, board_before=None, move=None, board_after=None,
                                    answered_squares=None, player_color=None):
-    """Stub — implemented in 4a2. Will be satisfied when the answered square
-    set exactly equals the script-computed legal destination set for the
-    piece on objective['square'] (an answer check, not a move check)."""
-    raise NotImplementedError("check_legal_moves_from_square: real check logic lands in slice 4a2")
+    """Quiz check: the answered square SET must exactly equal the legal
+    destination set from objective['square'] — not a subset, superset."""
+    target = chess.parse_square(objective["square"])
+    legal = {
+        m.to_square for m in board_before.legal_moves if m.from_square == target
+    } if board_before is not None else set()
+    answered = set(answered_squares or [])
+    detail = {
+        "correct_count": len(answered & legal),
+        "missing_count": len(legal - answered),
+        "extra_count": len(answered - legal),
+    }
+    return answered == legal, detail
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +138,97 @@ assert not (BRIDGE_OBJECTIVES & DEFERRED_TYPES), \
 
 
 # ---------------------------------------------------------------------------
+# Narration self-containment (spec: English Narration Contract / design F7).
+# A bare coordinate ("e4") must read "the square e4" to stay self-contained
+# when copy-pasted elsewhere. Lookbehind is case-insensitive on "S" only
+# (sentence-initial "Square e4" also counts). Python `re` lookbehind must
+# be FIXED-WIDTH, so only the word "square" directly before a coordinate
+# is recognized — authors repeat "the square" per coordinate in a list
+# ("the square d5 and the square f6"), rather than one plural "squares"
+# covering later references in the sentence.
+# ---------------------------------------------------------------------------
+SQUARE_COORD_RE = re.compile(r"(?<![Ss]quare )[a-h][1-8]\b")
+
+_NARRATION_TEXT_FIELDS = ("goal", "narration_seed", "success_text", "failure_text")
+_NARRATION_LIST_FIELDS = ("hints", "solution_text")
+
+
+def _bare_square_violations(lesson: dict) -> list[str]:
+    """Return one error string per user-facing field containing a bare
+    (un-phrased) square coordinate."""
+    violations = []
+    for field in _NARRATION_TEXT_FIELDS:
+        if SQUARE_COORD_RE.search(lesson.get(field) or ""):
+            violations.append(
+                f"Field '{field}' has a bare square coordinate — phrase it "
+                f"as 'the square e4', never a naked coordinate."
+            )
+    for field in _NARRATION_LIST_FIELDS:
+        for i, text in enumerate(lesson.get(field) or []):
+            if SQUARE_COORD_RE.search(text):
+                violations.append(
+                    f"Field '{field}[{i}]' has a bare square coordinate — "
+                    f"phrase it as 'the square e4', never a naked coordinate."
+                )
+    return violations
+
+
+# ---------------------------------------------------------------------------
+# Cross-field: an objective's square(s)/piece must match start_fen
+# occupancy, or the lesson is unplayable — rejected at load, not mid-drill.
+# checkmate_in_1 names no square, so it is never dispatched here.
+# ---------------------------------------------------------------------------
+def _square_occupancy_errors(objective: dict, obj_type: str, board: "chess.Board",
+                              learner_color: bool) -> list[str]:
+    errors: list[str] = []
+
+    def _square_or_none(name):
+        try:
+            return chess.parse_square(name)
+        except ValueError:
+            errors.append(f"Objective square '{name}' is not a valid square name.")
+            return None
+
+    if obj_type == "capture_square":
+        sq = _square_or_none(objective.get("square"))
+        if sq is not None:
+            piece = board.piece_at(sq)
+            if piece is None or piece.color == learner_color:
+                errors.append(
+                    f"Objective capture_square target '{objective['square']}' "
+                    f"must hold an opponent piece in start_fen."
+                )
+    elif obj_type == "reach_square":
+        piece_symbol = objective.get("piece")
+        if piece_symbol:
+            try:
+                piece_type = chess.PIECE_SYMBOLS.index(piece_symbol.lower())
+            except ValueError:
+                piece_type = None
+            has_piece = piece_type is not None and any(
+                p.piece_type == piece_type and p.color == learner_color
+                for p in board.piece_map().values()
+            )
+            if not has_piece:
+                errors.append(
+                    f"Objective reach_square names piece '{piece_symbol}' but "
+                    f"no such learner piece exists in start_fen."
+                )
+    elif obj_type == "legal_moves_from_square":
+        sq = _square_or_none(objective.get("square"))
+        if sq is not None:
+            piece = board.piece_at(sq)
+            if piece is None or piece.color != learner_color:
+                errors.append(
+                    f"Objective legal_moves_from_square square "
+                    f"'{objective['square']}' must hold a learner piece in "
+                    f"start_fen."
+                )
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # Lesson schema v1 validation
 # ---------------------------------------------------------------------------
 REQUIRED_KEYS = [
@@ -140,6 +254,8 @@ def validate_lesson(lesson: dict) -> list[str]:
     if errors:
         return errors  # further checks would just KeyError on missing fields
 
+    errors.extend(_bare_square_violations(lesson))
+
     stage = lesson["stage"]
     if stage not in STAGES:
         errors.append(f"Unknown stage '{stage}'. Must be one of {STAGES}.")
@@ -151,6 +267,7 @@ def validate_lesson(lesson: dict) -> list[str]:
         errors.append(f"Invalid start_fen: {e}")
 
     player_color = lesson["player_color"]
+    learner_color = {"white": chess.WHITE, "black": chess.BLACK}.get(player_color)
     if player_color not in ("white", "black"):
         errors.append(f"player_color must be 'white' or 'black', got '{player_color}'.")
     elif board is not None:
@@ -169,6 +286,10 @@ def validate_lesson(lesson: dict) -> list[str]:
             errors.append(
                 f"Verification predicate '{obj_type}' is not allowed in stage "
                 f"'{BRIDGE_STAGE}' — only bridge objectives are valid there."
+            )
+        elif board is not None and learner_color is not None:
+            errors.extend(
+                _square_occupancy_errors(lesson["objective"], obj_type, board, learner_color)
             )
     elif obj_type in BRIDGE_OBJECTIVES:
         if stage != BRIDGE_STAGE:
