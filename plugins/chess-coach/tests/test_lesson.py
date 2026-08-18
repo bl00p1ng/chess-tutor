@@ -1139,3 +1139,33 @@ def test_attempt_allowed_pieces_violation_rejected_no_budget_consumed(tmp_path):
         saved = json.load(f)
     assert saved["lesson"]["moves_used"] == 0
     assert saved["lesson"]["attempts_used"] == 0
+
+
+# ---------------------------------------------------------------------------
+# OPEN QUESTION (surfaced by the 4b-iii gate review, still unresolved as of
+# 4b-iv, not specified anywhere in spec/design/tasks): attempt against an
+# ALREADY-terminal lesson state has no guard and currently re-dispatches,
+# mutating counters again. This is a PIN, not a specification — it records
+# today's behavior so a deliberate future change (adding a terminal guard)
+# has a test to update, rather than an unnoticed regression either way.
+# Both the move-type path (pinned here) and the new quiz path (4b.9) share
+# this same gap, since neither _attempt_move nor _attempt_quiz checks
+# lesson_block["result"] before proceeding.
+# ---------------------------------------------------------------------------
+def test_attempt_against_terminal_state_currently_re_dispatches(tmp_path):
+    """PINS current (unspecified) behavior: a non-solving move submitted
+    against a state whose lesson.result is ALREADY 'solved' still
+    dispatches and mutates moves_used — the stale 'solved' result is never
+    reset by the rebase branch. Not asserted as correct, only as known."""
+    lesson = make_lesson()  # reach_square target f6, max_moves=3
+    state = make_lesson_state(lesson, result="solved", moves_used=1)
+    state_path = write_state_file(tmp_path, state, name="terminal_redispatch.json")
+
+    result = cmd_attempt(SimpleNamespace(move="d5b4", state=state_path))  # non-solving move
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    with open(state_path) as f:
+        saved = json.load(f)
+    assert saved["lesson"]["moves_used"] == 2       # incremented again post-terminal
+    assert saved["lesson"]["result"] == "solved"     # stale — never reset by the rebase branch
