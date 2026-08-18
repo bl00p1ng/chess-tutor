@@ -29,7 +29,7 @@ import glob
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
-from common import estimate_elo, elo_to_level
+from common import estimate_elo, elo_to_level, is_custom_start
 
 DEFAULT_PROFILE = os.path.expanduser("~/.chess_coach/profile.json")
 GAMES_DIR       = os.path.expanduser("~/.chess_coach/games/")
@@ -93,6 +93,16 @@ def cmd_update(args) -> dict:
 
     with open(args.state) as f:
         state = json.load(f)
+
+    # Lesson/drill states (custom start) are excluded from ELO history and the
+    # games archive BEFORE any mutation — a completed drill must leave no trace.
+    if is_custom_start(state):
+        return {
+            "ok":      True,
+            "skipped": True,
+            "reason":  "Custom-start (lesson/drill) state is excluded from ELO "
+                       "history and the games archive.",
+        }
 
     records   = state.get("move_records", [])
     user_color = state.get("color", "white")

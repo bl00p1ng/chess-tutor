@@ -203,11 +203,21 @@ def classify_move(delta_cp: int) -> tuple[str, str]:
 
 
 def board_from_state(state: dict) -> chess.Board:
-    """Reconstruct a Board from a saved state dict."""
-    board = chess.Board()
+    """Reconstruct a Board from a saved state dict.
+
+    Starts from state["start_fen"] when present, otherwise the standard
+    start position — then replays state["moves_uci"] on top of it.
+    """
+    start_fen = state.get("start_fen")
+    board = chess.Board(start_fen) if start_fen else chess.Board()
     for uci in state.get("moves_uci", []):
         board.push(chess.Move.from_uci(uci))
     return board
+
+
+def is_custom_start(state: dict) -> bool:
+    """True when the game/drill began from a non-standard position (has a start_fen)."""
+    return bool(state.get("start_fen"))
 
 
 # ---------------------------------------------------------------------------

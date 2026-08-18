@@ -19,7 +19,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from common import (
     evaluate, score_to_winrate, get_best_move, minimax,
-    classify_move, board_from_state, detect_opening,
+    classify_move, board_from_state, detect_opening, is_custom_start,
     PIECE_VALUES,
 )
 
@@ -155,10 +155,12 @@ def cmd_evaluate_user(args) -> dict:
     elif missed_cp > 20:
         lines.append(f"💡 Better: {best_san}  (gains ~{missed_cp / 100:.1f} more pawns)")
 
-    # Opening hints
-    board_hint = board_from_state(state)
-    o_hints = opening_hint(state.get("moves_san", []), move_san, board_hint, move)
-    lines.extend(o_hints)
+    # Opening hints — skipped for custom starts, where SAN-prefix matching and
+    # early-game heuristics against the standard start are meaningless.
+    if not is_custom_start(state):
+        board_hint = board_from_state(state)
+        o_hints = opening_hint(state.get("moves_san", []), move_san, board_hint, move)
+        lines.extend(o_hints)
 
     # Hanging piece warnings after user move
     hangers = hanging_pieces(board_after, turn_before)
@@ -201,10 +203,12 @@ def cmd_explain_ai(args) -> dict:
 
     delta = (score_after - score_before) if player == "white" else -(score_after - score_before)
 
-    # Reconstruct board before the last move
-    board_pre = chess.Board()
-    for uci in state["moves_uci"][:-1]:
-        board_pre.push(chess.Move.from_uci(uci))
+    # Reconstruct board before the last move — must honor a custom start_fen,
+    # not assume the standard start (a second, independent board_from_state call site).
+    board_pre = board_from_state({
+        "start_fen": state.get("start_fen"),
+        "moves_uci": state["moves_uci"][:-1],
+    })
 
     move  = chess.Move.from_uci(last["move_uci"])
     piece = board_pre.piece_at(move.from_square)

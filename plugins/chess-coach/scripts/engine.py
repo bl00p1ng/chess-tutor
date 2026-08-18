@@ -3,7 +3,7 @@
 engine.py — Chess game logic, move validation, AI, and state persistence.
 
 Commands:
-  new_game   --state FILE [--color white|black] [--level auto|beginner|intermediate|advanced] [--mode play|coach]
+  new_game   --state FILE [--color white|black] [--level auto|beginner|intermediate|advanced] [--mode play|coach] [--fen FEN]
   move       --state FILE --move <san_or_uci>
   ai_move    --state FILE [--persona ID] [--bundled-persona-dir DIR]
   legal      --state FILE
@@ -22,7 +22,7 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 from common import (
     evaluate, score_to_winrate, get_best_move,
-    board_from_state, detect_opening,
+    board_from_state, detect_opening, is_custom_start,
 )
 
 import chess
@@ -153,7 +153,15 @@ def check_game_over(board: chess.Board, state: dict) -> None:
 # Commands
 # ---------------------------------------------------------------------------
 def cmd_new_game(args) -> dict:
-    board      = chess.Board()
+    fen = getattr(args, "fen", None)
+    if fen:
+        try:
+            board = chess.Board(fen)
+        except ValueError as e:
+            return {"ok": False, "error": f"Invalid FEN: {e}"}
+    else:
+        board = chess.Board()
+
     score      = evaluate(board)
     human_name = args.player or "human"
     players    = {
@@ -173,6 +181,8 @@ def cmd_new_game(args) -> dict:
         "result":       None,
         "opening":      None,
     }
+    if fen:
+        state["start_fen"] = board.fen()
     save_state(state, args.state)
     return {
         "ok":             True,
@@ -207,10 +217,12 @@ def cmd_move(args) -> dict:
     state["move_records"].append(record)
     state["move_count"] += 1
 
-    # Update opening detection
-    opening = detect_opening(state["moves_san"])
-    if opening:
-        state["opening"] = opening
+    # Update opening detection — skipped for custom starts (drills / non-standard FENs),
+    # where SAN-prefix matching against the standard-start OPENINGS table is meaningless.
+    if not is_custom_start(state):
+        opening = detect_opening(state["moves_san"])
+        if opening:
+            state["opening"] = opening
 
     check_game_over(board, state)
     save_state(state, args.state)
@@ -294,9 +306,10 @@ def cmd_ai_move(args) -> dict:
     state["move_records"].append(record)
     state["move_count"] += 1
 
-    opening = detect_opening(state["moves_san"])
-    if opening:
-        state["opening"] = opening
+    if not is_custom_start(state):
+        opening = detect_opening(state["moves_san"])
+        if opening:
+            state["opening"] = opening
 
     check_game_over(board, state)
     save_state(state, args.state)
@@ -371,6 +384,8 @@ def main():
                     choices=["play", "coach"])
     ng.add_argument("--player", default="human",
                     help="Human player's nickname (stored in game record)")
+    ng.add_argument("--fen",    default=None,
+                    help="Optional starting FEN (defaults to the standard start position)")
     ng.add_argument("--state",  default="~/.chess_coach/current_game.json")
 
     # move
