@@ -551,7 +551,8 @@ def test_show_found_and_not_found(tmp_path):
 def test_start_gates_out_of_order_allows_replay(tmp_path, monkeypatch):
     """Spec scenarios: 'Linear within stage' (reject lesson 3 while lesson 2
     is still incomplete, redirect to it) and 'Replay without tracking' (an
-    already-completed lesson stays startable regardless of position)."""
+    already-completed lesson stays startable regardless of position). Also
+    covers the primary accept path: starting the actual next lesson."""
     bundled = tmp_path / "bundled"
     bundled.mkdir()
     three_stage_lessons(str(bundled))
@@ -562,6 +563,10 @@ def test_start_gates_out_of_order_allows_replay(tmp_path, monkeypatch):
     out_of_order = cmd_start(SimpleNamespace(id="l3", **common))
     assert out_of_order["ok"] is False
     assert out_of_order["next_lesson_id"] == "l2"
+
+    next_lesson = cmd_start(SimpleNamespace(id="l2", **common))
+    assert next_lesson["ok"] is True
+    assert next_lesson["lesson_id"] == "l2"
 
     replay = cmd_start(SimpleNamespace(id="l1", **common))
     assert replay["ok"] is True
