@@ -14,6 +14,7 @@ occupancy; the four PREDICATES checker functions. load_lesson_file lands
 in slice 4a3.
 """
 
+import json
 import os
 import sys
 
@@ -32,6 +33,8 @@ from lesson import (  # noqa: E402
     check_capture_square,
     check_checkmate_in_1,
     check_legal_moves_from_square,
+    load_lesson_file,
+    LessonValidationError,
 )
 
 KNIGHT_D5_FEN = "4k3/8/8/3N4/8/8/8/4K3 w - - 0 1"
@@ -424,3 +427,36 @@ def test_capture_square_en_passant_captured_square_not_satisfied():
     )
     assert satisfied is False
     assert detail["captured"] is False
+
+
+# ---------------------------------------------------------------------------
+# 4a3.1 — load_lesson_file: single-file read + JSON-parse + validate_lesson.
+# No merge/list logic here — that belongs to slice 4b's `list` command.
+# ---------------------------------------------------------------------------
+def test_load_lesson_file_valid_returns_parsed_dict(tmp_path):
+    """A well-formed lesson file loads and returns the parsed dict
+    unchanged."""
+    lesson = make_lesson()
+    path = tmp_path / "lesson.json"
+    path.write_text(json.dumps(lesson))
+
+    loaded = load_lesson_file(str(path))
+    assert loaded == lesson
+
+
+def test_load_lesson_file_invalid_raises_with_full_error_list(tmp_path):
+    """Triangulation: an invalid lesson raises LessonValidationError whose
+    .errors carries EVERY problem, not just the first — proven with a
+    lesson that fails two independent checks at once (bad stage AND bad
+    player_color), neither of which short-circuits the other."""
+    lesson = make_lesson(stage="not-a-real-stage", player_color="purple")
+    path = tmp_path / "bad.json"
+    path.write_text(json.dumps(lesson))
+
+    with pytest.raises(LessonValidationError) as exc_info:
+        load_lesson_file(str(path))
+
+    errors = exc_info.value.errors
+    assert len(errors) == 2
+    assert any("stage" in e.lower() for e in errors)
+    assert any("player_color" in e for e in errors)

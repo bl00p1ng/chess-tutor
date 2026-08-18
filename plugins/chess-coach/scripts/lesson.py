@@ -14,9 +14,14 @@ Slice 4a2 implemented the four PREDICATES checker bodies, narration
 self-containment, and cross-field FEN/objective occupancy checks. Deferred
 to slice 4a3: the single-file loader (load_lesson_file).
 
+Slice 4a3 implemented load_lesson_file and LessonValidationError below —
+single-file read + validate only, no bundled/user-dir merge (that is
+slice 4b's `list` command).
+
 Imported by that later slice's CLI. Do not run directly.
 """
 
+import json
 import re
 
 import chess
@@ -309,3 +314,35 @@ def validate_lesson(lesson: dict) -> list[str]:
         )
 
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Single-file loader (slice 4a3). No merge/list logic here — that belongs
+# to the `list` command (slice 4b), which reads bundled + user-dir lessons
+# and merges by id. Mirrors engine.py's load_state: file I/O and JSON-decode
+# errors propagate as-is, unwrapped.
+# ---------------------------------------------------------------------------
+class LessonValidationError(Exception):
+    """Raised by load_lesson_file when a lesson fails validate_lesson.
+
+    Carries the FULL list of validation error strings via .errors — a
+    caller needs every problem in one pass, not just the first message.
+    """
+
+    def __init__(self, errors: list[str]):
+        self.errors = errors
+        super().__init__("; ".join(errors))
+
+
+def load_lesson_file(path: str) -> dict:
+    """Read a single lesson JSON file from disk and return it validated.
+
+    Raises LessonValidationError if the lesson fails validate_lesson —
+    fails loudly rather than returning a partially-usable lesson.
+    """
+    with open(path) as f:
+        lesson = json.load(f)
+    errors = validate_lesson(lesson)
+    if errors:
+        raise LessonValidationError(errors)
+    return lesson
