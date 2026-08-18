@@ -26,7 +26,9 @@ Layout:
 import argparse
 import json
 import os
+import re
 import sys
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(__file__))
 from common import board_from_state
@@ -64,6 +66,78 @@ PIECE_UNICODE = {
     'K': '♔', 'Q': '♕', 'R': '♖', 'B': '♗', 'N': '♘', 'P': '♙',
     'k': '♚', 'q': '♛', 'r': '♜', 'b': '♝', 'n': '♞', 'p': '♟',
 }
+
+
+# ---------------------------------------------------------------------------
+# Width measurement — visible terminal columns, ANSI-aware (D5)
+# ---------------------------------------------------------------------------
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+# Unicode variation selectors modify the preceding glyph and add no
+# additional terminal column of their own.
+_VARIATION_SELECTORS = range(0xFE00, 0xFE10)
+
+# Box drawing (U+2500-257F) and block elements (U+2580-259F) render as
+# single-width glyphs here, even though Unicode reports several of them
+# (e.g. █, ▲, ▼) as East-Asian-Width "Ambiguous".
+_SINGLE_WIDTH_RANGES = ((0x2500, 0x257F), (0x2580, 0x259F))
+
+# Pictographs whose own East-Asian-Width property under-reports their real
+# double-width terminal rendering (▲▼ are "Ambiguous", ⚠ is "Neutral").
+_PICTOGRAPHS = set("⬜⬛✨💀⚠❌✅💡⭐▲▼🏁")
+
+
+def _char_width(ch: str) -> int:
+    """Return the terminal column width of a single non-ANSI character."""
+    code = ord(ch)
+    if code in _VARIATION_SELECTORS:
+        return 0
+    if any(lo <= code <= hi for lo, hi in _SINGLE_WIDTH_RANGES):
+        return 1
+    if ch in _PICTOGRAPHS:
+        return 2
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def visible_width(s: str) -> int:
+    """Return the visible terminal column width of s, ignoring ANSI escapes."""
+    return sum(_char_width(ch) for ch in _ANSI_RE.sub("", s))
+
+
+def _clamp(value: int, lo: int, hi: int) -> int:
+    return max(lo, min(hi, value))
+
+
+def effective_width(requested: int) -> int:
+    """Clamp a requested column width to the supported [40, 50] band.
+
+    50 is an absolute ceiling, never widened past — the caller-resolved
+    `requested` value (an explicit --width flag or terminal-size detection,
+    both wired in slice 3b) may only narrow it, never exceed it.
+    """
+    return _clamp(requested, 40, 50)
+
+
+def wrap_move_pairs(pair_texts: list[str], width: int) -> list[list[str]]:
+    """Greedily group pair_texts onto lines that fit within `width` columns.
+
+    Each line is measured as a 2-column indent plus its pair_texts joined
+    by 3 spaces. A single pair is never split across two lines — if one
+    pair alone is wider than `width`, it still occupies its own line.
+    """
+    lines: list[list[str]] = []
+    current: list[str] = []
+    for text in pair_texts:
+        candidate = current + [text]
+        candidate_width = 2 + visible_width("   ".join(candidate))
+        if current and candidate_width > width:
+            lines.append(current)
+            current = [text]
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -108,10 +182,11 @@ def render_board(board: chess.Board, last_uci: str | None = None) -> str:
     return "\n".join(rows)
 
 
-def render_winbar(winrate_white: float, width: int = 28) -> str:
-    """Return a text win-probability bar."""
-    w_blocks = round(winrate_white * width)
-    b_blocks = width - w_blocks
+def render_winbar(winrate_white: float, width: int = 50) -> str:
+    """Return a text win-probability bar sized to fit within `width` columns."""
+    bar_width = _clamp(width - 21, 8, 28)
+    w_blocks = round(winrate_white * bar_width)
+    b_blocks = bar_width - w_blocks
     bar = (
         f"{BOLD}{FG_WHITE}{'█' * w_blocks}{RESET}"
         f"{BOLD}{FG_GRAY}{'░' * b_blocks}{RESET}"
@@ -125,24 +200,36 @@ def render_winbar(winrate_white: float, width: int = 28) -> str:
     )
 
 
-def render_moves(moves_san: list[str], max_pairs: int = 8) -> str:
-    """Return formatted move history (PGN-style pairs)."""
+def render_moves(moves_san: list[str], width: int = 50, max_pairs: int = 8) -> str:
+    """Return formatted move history (PGN-style pairs), wrapped to width."""
     if not moves_san:
         return f"  {FG_GRAY}(no moves yet){RESET}"
 
-    pairs = []
+    plain_pairs   = []
+    colored_pairs = []
     for i in range(0, len(moves_san), 2):
         n       = i // 2 + 1
         white_m = moves_san[i]
         black_m = moves_san[i + 1] if i + 1 < len(moves_san) else "..."
-        pairs.append(
+        plain_pairs.append(f"{n}.{white_m} {black_m}")
+        colored_pairs.append(
             f"{FG_GRAY}{n}.{RESET}{FG_WHITE}{white_m}{RESET} {FG_GRAY}{black_m}{RESET}"
         )
 
-    shown = pairs[-max_pairs:]
-    if len(pairs) > max_pairs:
-        shown = [f"{FG_GRAY}...{RESET}"] + shown
-    return "  " + "   ".join(shown)
+    shown_plain   = plain_pairs[-max_pairs:]
+    shown_colored = colored_pairs[-max_pairs:]
+    if len(plain_pairs) > max_pairs:
+        shown_plain   = ["..."] + shown_plain
+        shown_colored = [f"{FG_GRAY}...{RESET}"] + shown_colored
+
+    groups = wrap_move_pairs(shown_plain, width)
+    lines  = []
+    cursor = 0
+    for group in groups:
+        n = len(group)
+        lines.append("  " + "   ".join(shown_colored[cursor:cursor + n]))
+        cursor += n
+    return "\n".join(lines)
 
 
 def render_coaching(coaching: str) -> str:
