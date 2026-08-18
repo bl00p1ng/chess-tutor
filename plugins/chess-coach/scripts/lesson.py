@@ -7,8 +7,11 @@ objective registries (PREDICATES, BRIDGE_OBJECTIVES), the deferred-type
 allowlist (DEFERRED_TYPES), and lesson-schema validation (validate_lesson)
 covering required fields, stage validity, FEN/player-color consistency, and
 the stage-constrained two-registry objective-type dispatch, and — as of
-slice 4b-i — a CLI exposing list/show/start (attempt/hint/status land in
-slice 4b-ii).
+slice 4b-i — a CLI exposing list/show/start. Slice 4b-ii adds attempt's
+reject-before-dispatch gate (adjudication #1: illegal move / bridge
+redirect / fail-closed unknown type) and status's resume/next-lesson
+report; attempt's accept path (predicate dispatch, D2 rebase, budget,
+reset) and hint land in slice 4b-iii.
 
 Slice 4a2 implemented the four PREDICATES checker bodies, narration
 self-containment, and cross-field FEN/objective occupancy checks. Deferred
@@ -18,7 +21,8 @@ Slice 4a3 implemented load_lesson_file and LessonValidationError below —
 single-file read + validate only, no bundled/user-dir merge (that is
 slice 4b's `list` command).
 
-Runnable directly as a CLI (list/show/start) or imported as a library.
+Runnable directly as a CLI (list/show/start/attempt/status) or imported
+as a library.
 """
 
 import argparse
@@ -29,6 +33,9 @@ import re
 import sys
 
 import chess
+
+from common import board_from_state
+from engine import parse_move
 
 # ---------------------------------------------------------------------------
 # Lesson state path (module-level constant so a later slice can bind it in
@@ -530,6 +537,119 @@ def cmd_start(args) -> dict:
     }
 
 
+def _load_lesson_state(path: str) -> dict:
+    with open(path) as f:
+        return json.load(f)
+
+
+def cmd_attempt(args) -> dict:
+    """Reject-before-dispatch gate only (tasks 4b.1/4b.2) — this is the
+    slice that makes adjudication #1's dispatch boundary real. Evaluating
+    an ACCEPTED move (predicate dispatch, D2 rebase, budget/reset) is
+    slice 4b-iii; reaching that point here returns a clear not-yet-built
+    response rather than silently mishandling a legal move."""
+    refusal = _refuse_game_state_path(args.state)
+    if refusal:
+        return refusal
+
+    state = _load_lesson_state(args.state)
+    lesson_block = state["lesson"]
+    definition = lesson_block["definition"]
+    objective = definition["objective"]
+    obj_type = objective.get("type")
+
+    # Adjudication #1: attempt dispatches PREDICATES only, and never a
+    # bridge objective (spec: "Attempt does not evaluate bridge objectives").
+    if obj_type in BRIDGE_OBJECTIVES:
+        return {
+            "ok": True, "accepted": False,
+            "reason": (
+                "This lesson is a free-play bridge, not a scored drill. "
+                "Use the bridge commands to play moves instead."
+            ),
+        }
+    # legal_moves_from_square is a genuine PREDICATES member, but its
+    # --squares quiz dispatch is a separate arg shape deferred to a later
+    # slice (tracked task 4b.9) — say so distinctly, never silently accept.
+    if obj_type == "legal_moves_from_square":
+        return {
+            "ok": True, "accepted": False,
+            "reason": "The squares quiz for this lesson is not available through attempt yet.",
+        }
+    if obj_type not in PREDICATES:
+        # Fail-closed: validate_lesson should already refuse this at load
+        # time; this is the defensive last line inside attempt itself.
+        return {"ok": False, "error": f"Objective type '{obj_type}' is not a recognized predicate."}
+
+    board_before = board_from_state(state)
+    move, err = parse_move(args.move, board_before)
+    if err:
+        # Chess-illegal move: rejected BEFORE predicate dispatch, no budget
+        # consumed (spec scenario: Illegal move).
+        return {
+            "ok": True, "accepted": False,
+            "reason": "That move is not legal in the current position.",
+        }
+
+    # A legal move on a real predicate — evaluation lands in slice 4b-iii.
+    return {
+        "ok": False,
+        "error": "Move evaluation is not implemented in this build yet.",
+    }
+
+
+def _stage_summary(ordered: list, completed_ids: set) -> dict:
+    summary: dict = {}
+    for lesson in ordered:
+        entry = summary.setdefault(lesson["stage"], {"total": 0, "completed": 0})
+        entry["total"] += 1
+        if lesson["id"] in completed_ids:
+            entry["completed"] += 1
+    return summary
+
+
+def cmd_status(args) -> dict:
+    refusal = _refuse_game_state_path(args.state)
+    if refusal:
+        return refusal
+
+    # The resume default (spec: Resume Offer) — an in-progress drill (no
+    # terminal result yet) from a prior session, if one exists. Reads
+    # whatever moves_used/attempts_used/result already sit in the state
+    # file; independent of how attempt got them there (4b-iii).
+    active = None
+    if os.path.exists(args.state):
+        state = _load_lesson_state(args.state)
+        lesson_block = state.get("lesson")
+        if lesson_block and lesson_block.get("result") is None:
+            definition = lesson_block["definition"]
+            board = board_from_state(state)
+            active = {
+                "lesson_id": definition["id"], "title": definition["title"],
+                "goal": definition["goal"], "fen": board.fen(),
+                "moves_used": lesson_block["moves_used"],
+                "attempts_used": lesson_block["attempts_used"],
+                "result": lesson_block["result"],
+            }
+
+    progress = load_learning_progress()
+    completed_ids = set(progress.get("completed", {}))
+    lessons, _ = _collect_lessons(args.bundled_dir, args.user_dir)
+    ordered = _curriculum_order(lessons)
+    next_id, _ = _gating_info(ordered, completed_ids)
+    next_lesson = None
+    if next_id is not None:
+        nxt = lessons[next_id]
+        next_lesson = {"id": nxt["id"], "title": nxt["title"], "stage": nxt["stage"]}
+
+    return {
+        "ok": True, "active": active,
+        "completed_ids": sorted(completed_ids),
+        "next_lesson": next_lesson,
+        "stage_summary": _stage_summary(ordered, completed_ids),
+    }
+
+
 def main():
     p = argparse.ArgumentParser(description="Lesson curriculum CLI")
     sub = p.add_subparsers(dest="command")
@@ -549,17 +669,36 @@ def main():
     st.add_argument("--bundled-dir", default=BUNDLED_LESSONS_DIR_DEFAULT)
     st.add_argument("--user-dir",    default=USER_LESSONS_DIR_DEFAULT)
 
+    at = sub.add_parser("attempt")
+    at.add_argument("--move",  required=True)
+    at.add_argument("--state", default=LESSON_STATE_PATH)
+
+    su = sub.add_parser("status")
+    su.add_argument("--state", default=LESSON_STATE_PATH)
+    su.add_argument("--bundled-dir", default=BUNDLED_LESSONS_DIR_DEFAULT)
+    su.add_argument("--user-dir",    default=USER_LESSONS_DIR_DEFAULT)
+
+    # hint is added in slice 4b-iii.
+
     args = p.parse_args()
     if not args.command:
         p.print_help()
         sys.exit(1)
 
-    args.bundled_dir = os.path.expanduser(args.bundled_dir)
-    args.user_dir    = os.path.expanduser(args.user_dir)
+    # Not every subcommand defines every flag (e.g. attempt has no
+    # --bundled-dir/--user-dir) — guard each expansion individually rather
+    # than assuming the full flag set unconditionally.
+    if hasattr(args, "bundled_dir"):
+        args.bundled_dir = os.path.expanduser(args.bundled_dir)
+    if hasattr(args, "user_dir"):
+        args.user_dir = os.path.expanduser(args.user_dir)
     if hasattr(args, "state"):
         args.state = os.path.expanduser(args.state)
 
-    dispatch = {"list": cmd_list, "show": cmd_show, "start": cmd_start}
+    dispatch = {
+        "list": cmd_list, "show": cmd_show, "start": cmd_start,
+        "attempt": cmd_attempt, "status": cmd_status,
+    }
     result = dispatch[args.command](args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

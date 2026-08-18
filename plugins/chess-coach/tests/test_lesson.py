@@ -40,6 +40,8 @@ from lesson import (  # noqa: E402
     cmd_list,
     cmd_show,
     cmd_start,
+    cmd_attempt,
+    cmd_status,
     _refuse_game_state_path,
 )
 
@@ -617,3 +619,165 @@ def test_state_realpath_refusal(tmp_path, monkeypatch):
     # Negative control: an unrelated path is never refused by this check —
     # proven directly against the helper (no lesson fixture needed).
     assert _refuse_game_state_path(str(tmp_path / "lesson_state.json")) is None
+
+
+# ---------------------------------------------------------------------------
+# 4b-ii — attempt's reject-before-dispatch gate, and status. Adjudication
+# #1 becomes real here: attempt routes PREDICATES only and must never
+# reach BRIDGE_OBJECTIVES. attempt's accept path (predicate dispatch, D2
+# rebase, budget/reset) and hint land in slice 4b-iii; free_play bridge
+# completion evaluation inside status lands in slice 4c.
+# ---------------------------------------------------------------------------
+def make_lesson_state(lesson, **lesson_block_overrides):
+    """Build a current_lesson.json-shaped state dict (State superset
+    contract) directly around a lesson definition, for attempt/status
+    tests that write state without going through cmd_start."""
+    learner_color = lesson["player_color"]
+    other_color = "black" if learner_color == "white" else "white"
+    lesson_block = {
+        "definition": lesson, "moves_history": [],
+        "moves_used": 0, "attempts_used": 0, "hints_used": 0, "result": None,
+    }
+    lesson_block.update(lesson_block_overrides)
+    return {
+        "color": learner_color, "player_name": "learner",
+        "players": {learner_color: "learner", other_color: "ai"},
+        "level": "beginner", "mode": "lesson",
+        "moves_uci": [], "moves_san": [], "move_records": [],
+        "move_count": 0, "result": None, "opening": None,
+        "start_fen": lesson["start_fen"],
+        "lesson": lesson_block,
+    }
+
+
+def write_state_file(tmp_path, state, name="lesson_state.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(state))
+    return str(path)
+
+
+def test_attempt_illegal_move_no_budget_consumed(tmp_path):
+    """Spec scenario 'Illegal move': a chess-illegal move is rejected BEFORE
+    predicate dispatch, and the moves_used/attempts_used budget counters
+    are unchanged."""
+    lesson = make_lesson()  # reach_square, KNIGHT_D5_FEN, max_moves=3
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state)
+
+    result = cmd_attempt(SimpleNamespace(move="e2e4", state=state_path))  # no piece on e2
+
+    assert result["ok"] is True
+    assert result["accepted"] is False
+    assert result["reason"]
+    with open(state_path) as f:
+        saved = json.load(f)
+    assert saved["lesson"]["moves_used"] == 0
+    assert saved["lesson"]["attempts_used"] == 0
+
+
+def test_attempt_unknown_objective_type_fails_closed(tmp_path):
+    """Fail-closed dispatch: an objective type outside PREDICATES (and not a
+    bridge objective either) must be REJECTED, never silently accepted or
+    treated as a pass — attempt's own dispatch fails closed even though
+    validate_lesson would already have refused this lesson at load time."""
+    lesson = make_lesson(objective={"type": "not_a_real_predicate"})
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state)
+
+    result = cmd_attempt(SimpleNamespace(move="d5f6", state=state_path))
+
+    assert result["ok"] is False
+
+
+def test_attempt_quiz_type_dispatch_deferred(tmp_path):
+    """legal_moves_from_square is a genuine PREDICATES member — not unknown,
+    not a bridge objective — but its --squares quiz dispatch is deferred to
+    a later slice (tracked task 4b.9). attempt must say so with wording
+    distinct from the bridge redirect, never silently accept it or route it
+    to a checker."""
+    lesson = make_lesson(objective={"type": "legal_moves_from_square", "square": "d5"})
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state)
+
+    result = cmd_attempt(SimpleNamespace(move="d5f6", state=state_path))
+
+    assert result["ok"] is True
+    assert result["accepted"] is False
+    assert "quiz" in result["reason"].lower()
+    assert "bridge" not in result["reason"].lower()
+
+
+def test_attempt_bridge_lesson_redirects(tmp_path):
+    """Spec scenario 'Attempt does not evaluate bridge objectives': a
+    free_play bridge-objective lesson always returns accepted:false from
+    attempt and is never routed into a PREDICATES checker. A legal move on
+    the bridge lesson's own (standard-start) board proves the redirect
+    fires regardless of move legality, not as a side effect of rejecting
+    an illegal move."""
+    lesson = make_bridge_lesson()
+    state = make_lesson_state(lesson)
+    state_path = write_state_file(tmp_path, state)
+
+    result = cmd_attempt(SimpleNamespace(move="e2e4", state=state_path))  # legal on a standard start
+
+    assert result["ok"] is True
+    assert result["accepted"] is False
+    assert "bridge" in result["reason"].lower()
+
+
+def test_refuse_game_state_path_wired_into_attempt_and_status(tmp_path, monkeypatch):
+    """D7-E wiring proof for the two new commands this slice adds — the
+    helper and its direct-call test already exist (4b-i); this proves each
+    calls it as its first line, via the same non-literal (symlink) path
+    form used in test_state_realpath_refusal. hint's wiring lands with
+    that command in slice 4b-iii."""
+    home = tmp_path / "home"
+    (home / ".chess_coach").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    game_path = home / ".chess_coach" / "current_game.json"
+    game_path.write_text("{}")
+    sneaky_link = tmp_path / "sneaky.json"
+    sneaky_link.symlink_to(game_path)
+
+    attempt_result = cmd_attempt(SimpleNamespace(move="e2e4", state=str(sneaky_link)))
+    status_result = cmd_status(SimpleNamespace(
+        state=str(sneaky_link),
+        bundled_dir=str(tmp_path / "bundled"), user_dir=str(tmp_path / "user"),
+    ))
+
+    for result in (attempt_result, status_result):
+        assert result["ok"] is False
+        assert "in-progress game" in result["error"]
+
+
+def test_status_offers_resume(tmp_path, monkeypatch):
+    """Spec scenario 'Resume offer': an in-progress drill from a prior
+    session (no terminal result yet) is reported as the active/default
+    resume entry point, regardless of how it reached that state."""
+    home = tmp_path / "home"
+    (home / ".chess_coach").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    lesson = make_lesson()
+    state = make_lesson_state(lesson, moves_used=1)
+    state_path = str(home / ".chess_coach" / "current_lesson.json")
+    with open(state_path, "w") as f:
+        json.dump(state, f)
+
+    result = cmd_status(SimpleNamespace(
+        state=state_path,
+        bundled_dir=str(tmp_path / "bundled"), user_dir=str(tmp_path / "user"),
+    ))
+
+    assert result["active"] is not None
+    assert result["active"]["lesson_id"] == "knight-tour-1"
+    assert result["active"]["moves_used"] == 1
+
+
+def test_status_no_active_lesson_when_state_missing(tmp_path):
+    """Triangulation: no prior-session state file means nothing to resume."""
+    result = cmd_status(SimpleNamespace(
+        state=str(tmp_path / "nope.json"),
+        bundled_dir=str(tmp_path / "bundled"), user_dir=str(tmp_path / "user"),
+    ))
+    assert result["active"] is None
