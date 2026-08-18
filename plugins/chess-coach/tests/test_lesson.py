@@ -342,6 +342,23 @@ def test_legal_moves_from_square_exact_match_satisfied():
     assert detail["extra_count"] == 0
 
 
+def test_legal_moves_from_square_superset_not_satisfied():
+    """Gate-finding remediation: a superset answer — every correct
+    destination PLUS one extra illegal square — must NOT be satisfied.
+    This proves exact-set equality, not merely a correct subset; only the
+    subset and exact-match cases were covered before this test."""
+    board_before = chess.Board(KNIGHT_D5_FEN)
+    legal = {m.to_square for m in board_before.legal_moves if m.from_square == chess.D5}
+    answered = legal | {chess.A1}  # every correct square, plus one extra
+    satisfied, detail = check_legal_moves_from_square(
+        {"type": "legal_moves_from_square", "square": "d5"},
+        board_before=board_before, answered_squares=answered,
+    )
+    assert satisfied is False
+    assert detail["missing_count"] == 0
+    assert detail["extra_count"] == 1
+
+
 # ---------------------------------------------------------------------------
 # 4a2.5 — check_capture_square
 # ---------------------------------------------------------------------------
@@ -365,3 +382,45 @@ def test_capture_square_not_satisfied_non_capture():
         board_before=board_before, move=move,
     )
     assert satisfied is False
+
+
+# ---------------------------------------------------------------------------
+# Gate-finding remediation (slice 4a2 validator fail, closed in 4a3): the
+# en-passant regression test below was written, GREEN, then cut for review
+# budget in 4a2 — restored here per the tracked follow-up. No production
+# code changes: check_capture_square already implements the documented
+# en-passant convention correctly; these prove it with executable coverage.
+# ---------------------------------------------------------------------------
+EN_PASSANT_FEN = "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1"
+
+
+def test_capture_square_satisfied_on_en_passant_destination():
+    """En-passant target names the CAPTURING pawn's destination square
+    (d6 for e5xd6 e.p.) — that convention, documented in the checker's
+    docstring, is satisfied here with an executable assertion."""
+    board_before = chess.Board(EN_PASSANT_FEN)
+    move = chess.Move.from_uci("e5d6")
+    assert board_before.is_en_passant(move)  # fixture sanity
+
+    satisfied, detail = check_capture_square(
+        {"type": "capture_square", "square": "d6"},
+        board_before=board_before, move=move,
+    )
+    assert satisfied is True
+    assert detail["captured"] is True
+
+
+def test_capture_square_en_passant_captured_square_not_satisfied():
+    """Triangulation: the CAPTURED pawn's square (d5) must NOT satisfy —
+    only the capturing pawn's destination (d6) counts. This is the exact
+    regression this test guards: a target-square convention flip between
+    d5 and d6 would silently break en-passant lessons."""
+    board_before = chess.Board(EN_PASSANT_FEN)
+    move = chess.Move.from_uci("e5d6")
+
+    satisfied, detail = check_capture_square(
+        {"type": "capture_square", "square": "d5"},
+        board_before=board_before, move=move,
+    )
+    assert satisfied is False
+    assert detail["captured"] is False
