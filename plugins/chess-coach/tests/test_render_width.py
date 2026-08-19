@@ -6,7 +6,8 @@ import chess
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 from render import (
     visible_width, effective_width, wrap_move_pairs, render_moves, render_winbar,
-    render_status, plain_render,
+    render_status, plain_render, full_render, render_coaching,
+    wrap_coaching_lines,
 )
 
 # Black king on e8, White queen on e1, open e-file: Black to move, in check.
@@ -207,3 +208,111 @@ def test_plain_render_bounded():
     assert sep_lines, "expected a coaching separator line"
     for sep_line in sep_lines:
         assert visible_width(sep_line) == 40  # width-2 dashes + 2-col indent = width exactly
+
+
+# ---------------------------------------------------------------------------
+# Coaching width bound (3c) — the tracked gap left open by 3a/3b: coaching
+# prose was emitted with a 2-column indent and no wrapping at all, so a
+# single long sentence blew past the absolute 50-column ceiling in both the
+# plain and the ANSI/full render paths.
+# ---------------------------------------------------------------------------
+
+LONG_COACHING = (
+    "This coaching sentence is deliberately longer than the absolute "
+    "fifty-column rendering ceiling."
+)
+
+
+def test_wrap_coaching_lines_bounds_every_line_without_splitting_words():
+    """The shared helper greedily fills lines within the width budget and
+    never breaks a word that fits on a line of its own."""
+    lines = wrap_coaching_lines(LONG_COACHING, 50)
+    assert len(lines) > 1  # the source line genuinely had to wrap
+    for line in lines:
+        assert visible_width(line) <= 50
+    # Every word survives, in order, with no character lost or duplicated.
+    assert " ".join(lines).split() == LONG_COACHING.split()
+
+
+def test_wrap_coaching_lines_hard_breaks_an_oversized_token():
+    """A single token wider than the budget cannot be word-wrapped, so it is
+    hard-broken — the bound holds unconditionally, never 'best effort'."""
+    lines = wrap_coaching_lines("x" * 120, 50)
+    assert len(lines) == 3
+    for line in lines:
+        assert visible_width(line) <= 50
+    assert "".join(lines) == "x" * 120
+
+
+def test_wrap_coaching_lines_preserves_source_line_structure():
+    """Each source line wraps independently, so authored paragraph breaks in
+    coaching text are not collapsed into one run-on block."""
+    lines = wrap_coaching_lines("Line one.\n\nLine two.", 50)
+    assert lines == ["Line one.", "", "Line two."]
+
+
+def test_wrap_coaching_lines_measures_double_width_glyphs():
+    """Width is measured in visible terminal columns, not len() — a run of
+    double-width pictographs consumes two columns each."""
+    lines = wrap_coaching_lines("💡 " + "⬜" * 40, 50)
+    for line in lines:
+        assert visible_width(line) <= 50
+    assert len(lines) > 1
+
+
+def test_render_coaching_wraps_long_prose_within_width():
+    """The ANSI coaching renderer honours the width bound, and no ANSI colour
+    run spans a line boundary — every emitted line resets its own colour."""
+    result = render_coaching(LONG_COACHING, width=50)
+    lines = result.split("\n")
+    assert len(lines) > 1
+    for line in lines:
+        assert visible_width(line) <= 50
+        assert line.startswith("  \033[33m")
+        assert line.endswith("\033[0m")
+
+
+def test_render_coaching_matches_plain_wrapping_exactly():
+    """The ANSI and plain paths share one wrapping decision: stripping the
+    escape codes from render_coaching reproduces the plain wrapped lines."""
+    ansi_lines = render_coaching(LONG_COACHING, width=42).split("\n")
+    stripped = [line.replace("\033[33m", "").replace("\033[0m", "")[2:]
+                for line in ansi_lines]
+    assert stripped == wrap_coaching_lines(LONG_COACHING, 42 - 2)
+
+
+def test_plain_render_wraps_long_coaching_at_ceiling():
+    """Regression for the verification blocker: the plain path produced a
+    97-column line for this exact coaching sentence at requested width 50."""
+    state = {
+        "color": "white",
+        "level": "beginner",
+        "mode": "lesson",
+        "moves_uci": [],
+        "moves_san": [],
+        "move_records": [{"winrate_white": 0.5, "coaching": LONG_COACHING}],
+        "opening": None,
+        "result": None,
+    }
+    result = plain_render(state, width=50)
+    lines = result.split("\n")
+    assert any(LONG_COACHING.split()[0] in line for line in lines)
+    for line in lines:
+        assert visible_width(line) <= 50
+
+
+def test_full_render_wraps_long_coaching_at_ceiling():
+    """The ANSI/full path carries the same bound as the plain path."""
+    state = {
+        "color": "white",
+        "level": "beginner",
+        "mode": "lesson",
+        "moves_uci": [],
+        "moves_san": [],
+        "move_records": [{"winrate_white": 0.5, "coaching": LONG_COACHING}],
+        "opening": None,
+        "result": None,
+    }
+    result = full_render(state, False, width=50)
+    for line in result.split("\n"):
+        assert visible_width(line) <= 50

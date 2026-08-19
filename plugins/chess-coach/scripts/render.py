@@ -254,9 +254,55 @@ def render_moves(moves_san: list[str], width: int = 50, max_pairs: int = 8,
     return "\n".join(lines)
 
 
-def render_coaching(coaching: str) -> str:
-    """Return coaching text lines with yellow color."""
-    lines = coaching.strip().split("\n")
+def wrap_coaching_lines(coaching: str, width: int) -> list[str]:
+    """Greedily wrap coaching prose to at most `width` visible columns.
+
+    Each source line wraps independently, so authored paragraph breaks
+    survive instead of collapsing into one run-on block. Words are kept
+    whole while they fit; a single token wider than the budget is
+    hard-broken, so the bound holds unconditionally rather than as a
+    best effort. Width is measured in visible terminal columns (D5), not
+    in `len()` — coaching prose carries double-width pictographs.
+    """
+    if width <= 0:
+        return []
+    wrapped: list[str] = []
+    for source in _ANSI_RE.sub("", coaching.strip()).split("\n"):
+        words = source.split()
+        if not words:
+            wrapped.append("")
+            continue
+        current = ""
+        for word in words:
+            while visible_width(word) > width:
+                if current:
+                    wrapped.append(current)
+                    current = ""
+                head = _truncate_to_width(word, width)
+                wrapped.append(head)
+                word = word[len(head):]
+            if not word:
+                continue
+            candidate = f"{current} {word}" if current else word
+            if current and visible_width(candidate) > width:
+                wrapped.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            wrapped.append(current)
+    return wrapped
+
+
+def render_coaching(coaching: str, width: int = 50) -> str:
+    """Return coaching text lines with yellow color, bounded to `width`.
+
+    Wrapping is decided on the plain text and color is applied per wrapped
+    line, so an ANSI run never spans a line boundary and the visible text
+    matches the plain path exactly (F8). The 2-column indent is charged
+    against the budget.
+    """
+    lines = wrap_coaching_lines(coaching, width - 2)
     return "\n".join(f"  {FG_YEL}{line}{RESET}" for line in lines)
 
 
@@ -362,7 +408,7 @@ def plain_render(state: dict, width: int = 50) -> str:
     if coaching:
         sep = "  " + "─" * (width - 2)
         lines.append(sep)
-        for line in coaching.strip().split("\n"):
+        for line in wrap_coaching_lines(coaching, width - 2):
             lines.append(f"  {line}")
         lines.append(sep)
         lines.append("")
@@ -400,7 +446,7 @@ def full_render(state: dict, do_clear: bool, width: int = 50) -> str:
     if coaching:
         sep = f"  {FG_GRAY}{'─' * (width - 2)}{RESET}"
         parts.append(sep)
-        parts.append(render_coaching(coaching))
+        parts.append(render_coaching(coaching, width=width))
         parts.append(sep)
 
     parts.append(render_status(board, state, width=width))
