@@ -2,16 +2,15 @@
 test_lesson.py — Lesson library: registries, validate_lesson, and the four
 verification predicate checks (plugins/chess-coach/scripts/lesson.py).
 
-lesson.py ships as an inert library in this slice: no CLI, no argparse, no
-command dispatch. Every test below imports and calls library functions
-directly (pure-function style, matching test_render_width.py) — there is
-nothing to shell out to yet.
+Library-level checks import and call functions directly (pure-function
+style, matching test_render_width.py); lifecycle checks shell out to the
+real CLI so command wiring is exercised end to end.
 
 Covers: PREDICATES/BRIDGE_OBJECTIVES/DEFERRED_TYPES disjointness
 (adjudication #1); validate_lesson required fields, stage-constrained
 dispatch, narration self-containment (F7), cross-field FEN/objective
-occupancy; the four PREDICATES checker functions. load_lesson_file lands
-in slice 4a3.
+occupancy; the four PREDICATES checker functions; load_lesson_file; and
+the lesson command lifecycle.
 """
 
 import json
@@ -112,7 +111,7 @@ def test_predicates_registry_disjoint_and_exact():
     assert not (set(PREDICATES) & BRIDGE_OBJECTIVES)
     assert not (set(PREDICATES) & DEFERRED_TYPES)
     assert not (BRIDGE_OBJECTIVES & DEFERRED_TYPES)
-    # Structural proof: attempt (slice 4b) looks up PREDICATES[type] to dispatch.
+    # Structural proof: attempt looks up PREDICATES[type] to dispatch.
     # free_play has no entry there, so it cannot be routed into attempt.
     assert "free_play" not in PREDICATES
 
@@ -127,9 +126,9 @@ def test_validate_lesson_accepts_well_formed_lesson():
 
 
 def test_validate_deferred_type_rejected():
-    """A deferred type (checkmate_in_n, avoid_capture) is rejected at load,
-    and creates no lesson state — this slice ships no state-writing code at
-    all, so 'no state created' holds structurally for every rejection path."""
+    """A deferred type (checkmate_in_n, avoid_capture) is rejected at load.
+    validate_lesson is a pure function that writes nothing, so 'no state
+    created' holds structurally for every rejection path."""
     lesson = make_lesson(objective={"type": "checkmate_in_n", "n": 2})
     errors = validate_lesson(lesson)
     assert errors

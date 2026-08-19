@@ -1,28 +1,31 @@
 """
-lesson.py — Lesson definitions, strict validation, and objective-verification
-predicates for the Learn Mode curriculum.
+lesson.py — Lesson definitions, strict validation, objective-verification
+predicates, and the Learn Mode lesson CLI.
 
-This module is a library only in this slice: it defines the two disjoint
-objective registries (PREDICATES, BRIDGE_OBJECTIVES), the deferred-type
-allowlist (DEFERRED_TYPES), and lesson-schema validation (validate_lesson)
-covering required fields, stage validity, FEN/player-color consistency, and
-the stage-constrained two-registry objective-type dispatch, and — as of
-slice 4b-i — a CLI exposing list/show/start. Slice 4b-ii adds attempt's
-reject-before-dispatch gate (adjudication #1: illegal move / bridge
-redirect / fail-closed unknown type) and status's resume/next-lesson
-report; attempt's accept path (predicate dispatch, D2 rebase, budget,
-reset) and hint land in slice 4b-iii.
+Runnable directly as a CLI or imported as a library.
 
-Slice 4a2 implemented the four PREDICATES checker bodies, narration
-self-containment, and cross-field FEN/objective occupancy checks. Deferred
-to slice 4a3: the single-file loader (load_lesson_file).
+Library surface:
+  - Two disjoint objective registries, PREDICATES (four verification types
+    dispatched by `attempt`) and BRIDGE_OBJECTIVES (guided-play only,
+    completed by `status`), plus the DEFERRED_TYPES allowlist of objective
+    types that are named but deliberately not implemented (design D3 /
+    adjudication #1).
+  - validate_lesson: required fields, stage validity, FEN/player-color
+    consistency, narration self-containment (F7), cross-field FEN/objective
+    occupancy, and stage-constrained two-registry objective-type dispatch.
+    Anything outside all three registries is rejected fail-closed.
+  - load_lesson_file / LessonValidationError: single-file read plus
+    validation. Bundled and user-directory merging belongs to `list`.
 
-Slice 4a3 implemented load_lesson_file and LessonValidationError below —
-single-file read + validate only, no bundled/user-dir merge (that is
-slice 4b's `list` command).
+CLI surface:
+  list / show / start / attempt / hint / status, plus the bound
+  bridge_eval / bridge_move / bridge_ai commands. `attempt` rejects
+  chess-illegal moves, pieces outside allowed_pieces, and already-terminal
+  lessons before any dispatch or budget use, and redirects bridge
+  objectives rather than evaluating them.
 
-Runnable directly as a CLI (list/show/start/attempt/hint/status plus the
-bound bridge_eval/bridge_move/bridge_ai commands) or imported as a library.
+Lesson state lives in its own sidecar file and never depends on or mutates
+the Coach/Play game state.
 """
 
 import argparse
@@ -41,8 +44,8 @@ from common import board_from_state
 from engine import cmd_ai_move, cmd_move, parse_move
 
 # ---------------------------------------------------------------------------
-# Lesson state path (module-level constant so a later slice can bind it in
-# code rather than accepting it as a user-typed --state argument — see D7-B).
+# Lesson state path (module-level constant so the bound bridge commands can
+# bind it in code rather than accept a user-typed --state argument — D7-B).
 # ---------------------------------------------------------------------------
 LESSON_STATE_PATH = "~/.chess_coach/current_lesson.json"
 
@@ -55,8 +58,8 @@ BRIDGE_STAGE = "guided-play"
 
 
 # ---------------------------------------------------------------------------
-# Verification predicate checks — dispatched by the `attempt` command
-# (slice 4b) via PREDICATES[objective["type"]]. Every checker shares one
+# Verification predicate checks — dispatched by the `attempt` command via
+# PREDICATES[objective["type"]]. Every checker shares one
 # uniform keyword-only signature so dispatch never needs per-type branching.
 # ---------------------------------------------------------------------------
 def check_reach_square(objective, *, board_before=None, move=None, board_after=None,
@@ -122,7 +125,7 @@ def check_legal_moves_from_square(objective, *, board_before=None, move=None, bo
 # ---------------------------------------------------------------------------
 # Objective registries — TWO DISJOINT SETS (design D3 / adjudication #1).
 #
-# PREDICATES: verification predicates, dispatched by `attempt` (slice 4b).
+# PREDICATES: verification predicates, dispatched by `attempt`.
 # Exactly four types. Fail-closed: any objective type outside both
 # PREDICATES and BRIDGE_OBJECTIVES is rejected at load by validate_lesson.
 #
@@ -331,8 +334,8 @@ def validate_lesson(lesson: dict) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Single-file loader (slice 4a3). No merge/list logic here — that belongs
-# to the `list` command (slice 4b), which reads bundled + user-dir lessons
+# Single-file loader. No merge/list logic here — that belongs to the
+# `list` command, which reads bundled + user-dir lessons
 # and merges by id. Mirrors engine.py's load_state: file I/O and JSON-decode
 # errors propagate as-is, unwrapped.
 # ---------------------------------------------------------------------------
@@ -363,8 +366,8 @@ def load_lesson_file(path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# CLI surface (slice 4b-i): list / show / start. attempt/hint/status are a
-# later slice (4b-ii) — see design's command-surface table. Every home-
+# CLI surface: list / show / start / attempt / hint / status plus the bound
+# bridge commands — see design's command-surface table. Every home-
 # relative default below stays an UNEXPANDED string, expanded only at call
 # time (inside main() or the function that reads it) — never baked at
 # import time — so a test's HOME override always takes effect.
