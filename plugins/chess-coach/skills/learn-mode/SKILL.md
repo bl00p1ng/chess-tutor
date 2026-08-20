@@ -33,31 +33,31 @@ Use this skill when a user asks to learn chess from the beginning, continue a le
 
 1. Run:
    ```bash
-   python3 plugins/chess-coach/scripts/lesson.py status
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lesson.py" status
    ```
    Read `active`, `next_lesson`, and the script-computed progress.
 2. On an accepted resume, render the saved lesson:
    ```bash
-   python3 plugins/chess-coach/scripts/render.py --plain --state ~/.chess_coach/current_lesson.json
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" --plain --state ~/.chess_coach/current_lesson.json
    ```
    On an accepted new lesson, start the `next_lesson.id` returned by status:
    ```bash
-   python3 plugins/chess-coach/scripts/lesson.py start --id <lesson-id>
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lesson.py" start --id <lesson-id>
    ```
    Narrate its returned goal.
 3. For a scored drill, narrate only the returned result. Give a hint without changing eligibility:
    ```bash
-   python3 plugins/chess-coach/scripts/lesson.py hint
-   python3 plugins/chess-coach/scripts/lesson.py attempt --move <uci>
-   python3 plugins/chess-coach/scripts/lesson.py attempt --squares <square1,square2,...>
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lesson.py" hint
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lesson.py" attempt --move <uci>
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lesson.py" attempt --squares <square1,square2,...>
    ```
 4. For a guided-play bridge, evaluate first, ask whether to commit, then make the exchange and render it:
    ```bash
-   python3 plugins/chess-coach/scripts/lesson.py bridge_eval --move <uci>
-   python3 plugins/chess-coach/scripts/lesson.py bridge_move --move <uci>
-   python3 plugins/chess-coach/scripts/lesson.py bridge_ai
-   python3 plugins/chess-coach/scripts/render.py --plain --state ~/.chess_coach/current_lesson.json
-   python3 plugins/chess-coach/scripts/lesson.py status
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lesson.py" bridge_eval --move <uci>
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lesson.py" bridge_move --move <uci>
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lesson.py" bridge_ai
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" --plain --state ~/.chess_coach/current_lesson.json
+   python3 "${CLAUDE_PLUGIN_ROOT}/scripts/lesson.py" status
    ```
    Let the final status decide bridge completion.
 5. When status shows no active or next lesson, say: Ask: "You completed the curriculum. Would you like to start Coach or Play from the standard chess position?" Do not start Coach or Play automatically. Never run `engine.py new_game` before explicit graduation acceptance. Only after an explicit yes, Load the `chess-coach` skill and continue its selected normal-mode flow.

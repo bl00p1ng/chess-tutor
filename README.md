@@ -1,4 +1,4 @@
-# ♟ claude-chess
+# ♟ Chess Tutor
 
 > I got tired of alt-tabbing between my terminal and a chess website. So I built a chess coach that lives inside Claude Code.
 
@@ -6,9 +6,11 @@
 
 ## What is this?
 
-It's a Claude Code skill that lets you play chess — right in your terminal, with Claude as your coach.
+It's a Claude Code plugin that teaches you chess from zero and then plays it with you — right in your terminal, with Claude as your coach.
 
-After every move, Claude tells you if it was good or terrible, shows you what you *should* have played, and explains why it made its own move. When you're done, it saves a full game review to a Markdown file, including your estimated ELO.
+If you've never played, start with Learn Mode: a ten-lesson curriculum that walks you from how a pawn moves to your first guided game. Every lesson is checked by a script, not by Claude's opinion, so "correct" means correct.
+
+If you already play, skip straight to a game. After every move, Claude tells you if it was good or terrible, shows you what you *should* have played, and explains why it made its own move. When you're done, it saves a full game review to a Markdown file, including your estimated ELO.
 
 No Stockfish required. No separate app. Just Claude.
 
@@ -63,8 +65,31 @@ ANSI color codes are terminal-only — they can't render in markdown chat. The c
 
 ---
 
+## Learn Mode — from zero
+
+Say **"I want to learn chess"** and Claude runs the curriculum:
+
+| Stage | What you practice |
+|---|---|
+| `board-and-pieces` | How the pawn, knight, bishop and rook move |
+| `special-rules` | Pawn captures and castling |
+| `material-and-mate` | The queen's reach, and mate in one |
+| `guided-play` | Your first real exchanges, with the coach beside you |
+
+Ten lessons, unlocked in order. A few things that make it work:
+
+- **The script decides, Claude narrates.** Whether you solved a lesson is a verdict from `lesson.py`, never Claude's judgement. It cannot be talked into passing you.
+- **Hints are free.** Asking for one never costs you an attempt and never blocks you from completing the lesson.
+- **Your game is untouchable.** Lesson state lives in its own file. You can have a game in progress, do three lessons, and come back to it byte-for-byte unchanged.
+- **Graduation is opt-in.** Finishing the last lesson offers you a real game. It never starts one on its own.
+
+Come back later and just say you want to continue — it resumes where you stopped.
+
+---
+
 ## Features
 
+- **Learn from zero** — a ten-lesson beginner curriculum with script-verified objectives, free hints, and guided first games
 - **Two board views** — plain Unicode board in the chat after every move; full color ANSI board with highlighted last move and win-probability bar in the terminal (`Ctrl+O` in Claude Code)
 - **Personas** — play against historical chess legends (Fischer, Tal, Petrosian, Carlsen), each with their own opening repertoire, aggression level, and coaching voice; or extract a persona from any game record collection
 - **Real-time coaching** — rates every move (brilliant ✨ / good ✅ / inaccuracy ⚠️ / mistake ❌ / blunder 💀), shows win probability shift, and suggests better alternatives

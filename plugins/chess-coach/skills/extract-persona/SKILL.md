@@ -10,15 +10,20 @@ description: |
 
 ## Finding Scripts
 
-The scripts and personas live at fixed paths relative to the repo root:
+The scripts and bundled personas live inside this plugin; only the user's
+own personas live under the home directory:
 
 ```
-SCRIPT_DIR         = plugins/chess-coach/scripts
-BUNDLED_PERSONA_DIR = plugins/chess-coach/personas
+SCRIPT_DIR          = ${CLAUDE_PLUGIN_ROOT}/scripts
+BUNDLED_PERSONA_DIR = ${CLAUDE_PLUGIN_ROOT}/personas
 USER_PERSONA_DIR    = ~/.chess_coach/personas
 ```
 
-Every command uses these paths directly — no shell variable expansion needed.
+`${CLAUDE_PLUGIN_ROOT}` is exported by Claude Code and points at this
+plugin's own directory, wherever it was installed. Never assume the
+session cwd is this repository — it is the user's own project. This is
+parameter expansion, not `$()` command substitution.
+
 
 ## Flow
 
@@ -29,13 +34,13 @@ Every command uses these paths directly — no shell variable expansion needed.
 ### Step 2a — Game history path
 
 ```bash
-python3 "plugins/chess-coach/scripts/profile.py" recommend
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/profile.py" recommend
 ```
 
 Use `nickname` as the actor name. Ask for a persona ID (default: nickname).
 
 ```bash
-python3 "plugins/chess-coach/scripts/persona.py" extract --actor "<nickname>" --id "<id>" --games-dir ~/.chess_coach/games
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/persona.py" extract --actor "<nickname>" --id "<id>" --games-dir ~/.chess_coach/games
 ```
 
 Read `persona` from the JSON output (machine layer only — no character voice yet).
@@ -49,7 +54,7 @@ try again." and stop.
 Ask: "Path to the PGN file?" and "Player name in the PGN?" and "Persona ID?"
 
 ```bash
-python3 "plugins/chess-coach/scripts/persona.py" import_pgn --pgn "<path>" --player "<player_name>" --id "<id>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/persona.py" import_pgn --pgn "<path>" --player "<player_name>" --id "<id>"
 ```
 
 Read `persona` from the JSON output.

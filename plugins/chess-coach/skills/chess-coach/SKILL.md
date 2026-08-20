@@ -15,19 +15,23 @@ length when the situation needs guidance or coaching commentary.
 
 ## Finding the Scripts
 
-The Python scripts live at `plugins/chess-coach/scripts/` relative to the repo root.
-Claude Code always opens at the repo root, so use this fixed path throughout:
+The Python scripts live inside this plugin, so address them through the
+plugin root rather than the session's working directory:
 
 ```
-SCRIPT_DIR = plugins/chess-coach/scripts
+SCRIPT_DIR = ${CLAUDE_PLUGIN_ROOT}/scripts
 ```
 
-Every command in this skill uses that prefix directly, e.g.:
+Every command in this skill uses that prefix, e.g.:
 ```bash
-python3 plugins/chess-coach/scripts/engine.py status
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/engine.py" status
 ```
 
-No shell variable expansion or `$()` substitution needed.
+`${CLAUDE_PLUGIN_ROOT}` is exported by Claude Code and points at this
+plugin's own directory, wherever it was installed. Never assume the
+session cwd is this repository — it is the user's own project. This is
+parameter expansion, not `$()` command substitution.
+
 
 ## Directory Layout
 
@@ -63,13 +67,13 @@ pip install chess --break-system-packages -q
 ### Step 1 — Load player profile and recommend difficulty
 
 ```bash
-python3 "plugins/chess-coach/scripts/profile.py" recommend
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/profile.py" recommend
 ```
 
 Read `nickname`, `recommended_level`, and `note` from the output.
 - If `nickname` is null: ask the user "What should I call you?" and persist it:
   ```bash
-  python3 "plugins/chess-coach/scripts/profile.py" set_nickname --name "<name>"
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/profile.py" set_nickname --name "<name>"
   ```
   Use the returned `nickname` for all subsequent references and game records.
 - If `nickname` is set: greet them by name — "Welcome back, <nickname>!"
@@ -80,7 +84,7 @@ Read `nickname`, `recommended_level`, and `note` from the output.
 ### Step 1b — Persona selection (optional)
 
 ```bash
-python3 "plugins/chess-coach/scripts/persona.py" list --bundled-dir "plugins/chess-coach/personas" --user-dir ~/.chess_coach/personas
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/persona.py" list --bundled-dir "${CLAUDE_PLUGIN_ROOT}/personas" --user-dir ~/.chess_coach/personas
 ```
 
 Show available personas as a numbered list (name and source only — descriptions
@@ -89,7 +93,7 @@ Ask: "Play against the standard AI, or choose a persona?"
 
 - If user chooses a persona: note the persona ID for this session. Load its full data:
   ```bash
-  python3 "plugins/chess-coach/scripts/persona.py" show --id "<persona_id>" --bundled-dir "plugins/chess-coach/personas" --user-dir ~/.chess_coach/personas
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/persona.py" show --id "<persona_id>" --bundled-dir "${CLAUDE_PLUGIN_ROOT}/personas" --user-dir ~/.chess_coach/personas
   ```
   Read `description`, `personality`, `move_voice`, `coaching_voice` — hold in context.
   Introduce: "You'll be playing against **\<name\>**. \<description\>"
@@ -98,7 +102,7 @@ Ask: "Play against the standard AI, or choose a persona?"
 ### Step 2 — Start a new game
 
 ```bash
-python3 "plugins/chess-coach/scripts/engine.py" new_game --color white --level intermediate --mode play --player "<nickname>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/engine.py" new_game --color white --level intermediate --mode play --player "<nickname>"
 ```
 
 Replace `white` with `black` if the user picks Black, `intermediate` with the resolved difficulty, and `<nickname>` with the player's name.
@@ -107,22 +111,22 @@ Replace `white` with `black` if the user picks Black, `intermediate` with the re
 
 With persona active:
 ```bash
-python3 "plugins/chess-coach/scripts/engine.py" ai_move --persona "<persona_id>" --bundled-persona-dir "plugins/chess-coach/personas"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/engine.py" ai_move --persona "<persona_id>" --bundled-persona-dir "${CLAUDE_PLUGIN_ROOT}/personas"
 ```
 Without persona:
 ```bash
-python3 "plugins/chess-coach/scripts/engine.py" ai_move
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/engine.py" ai_move
 ```
 Then:
 ```bash
-python3 "plugins/chess-coach/scripts/coach.py" explain_ai
-python3 "plugins/chess-coach/scripts/render.py" --plain
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/coach.py" explain_ai
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" --plain
 ```
 
 ### Step 3 — Render the board
 
 ```bash
-python3 "plugins/chess-coach/scripts/render.py" --plain
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" --plain
 ```
 
 **The printed output is the board.** After every move, run this command and paste the
@@ -138,13 +142,13 @@ chat window.
 
 Evaluate before committing:
 ```bash
-python3 "plugins/chess-coach/scripts/coach.py" evaluate_user --move <uci>
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/coach.py" evaluate_user --move <uci>
 ```
 Note `coaching_lines` from the output — relay them conversationally after the move.
 
 Commit the move:
 ```bash
-python3 "plugins/chess-coach/scripts/engine.py" move --move <uci>
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/engine.py" move --move <uci>
 ```
 
 Get the move index for the annotation step (prints a single integer):
@@ -153,12 +157,12 @@ python3 -c "import json,os; s=json.load(open(os.path.expanduser('~/.chess_coach/
 ```
 Use the printed number as `<idx>` in the annotate call:
 ```bash
-python3 "plugins/chess-coach/scripts/coach.py" annotate --move_idx <idx> --text "<coaching_text>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/coach.py" annotate --move_idx <idx> --text "<coaching_text>"
 ```
 
 Render the board:
 ```bash
-python3 "plugins/chess-coach/scripts/render.py" --plain
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" --plain
 ```
 Include the output as a code block in your reply.
 
@@ -166,17 +170,17 @@ Include the output as a code block in your reply.
 
 With persona active:
 ```bash
-python3 "plugins/chess-coach/scripts/engine.py" ai_move --persona "<persona_id>" --bundled-persona-dir "plugins/chess-coach/personas"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/engine.py" ai_move --persona "<persona_id>" --bundled-persona-dir "${CLAUDE_PLUGIN_ROOT}/personas"
 ```
 Without persona:
 ```bash
-python3 "plugins/chess-coach/scripts/engine.py" ai_move
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/engine.py" ai_move
 ```
 
 Then:
 ```bash
-python3 "plugins/chess-coach/scripts/coach.py" explain_ai
-python3 "plugins/chess-coach/scripts/render.py" --plain
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/coach.py" explain_ai
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" --plain
 ```
 
 Relay `coaching_lines` from explain_ai, and include the board output as a code block in
@@ -219,12 +223,12 @@ When any engine/ai_move response returns `"is_game_over": true`:
 
 Generate a review file — use the current date and time as the timestamp (format: YYYYMMDD_HHMMSS):
 ```bash
-python3 "plugins/chess-coach/scripts/review.py" --output ~/.chess_coach/reviews/review_<YYYYMMDD_HHMMSS>.md
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/review.py" --output ~/.chess_coach/reviews/review_<YYYYMMDD_HHMMSS>.md
 ```
 
 Update the player profile:
 ```bash
-python3 "plugins/chess-coach/scripts/profile.py" update --state ~/.chess_coach/current_game.json
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/profile.py" update --state ~/.chess_coach/current_game.json
 ```
 
 Tell the user their estimated ELO for this game, how it compares to their
@@ -238,8 +242,8 @@ All game data is persisted in `~/.chess_coach/current_game.json`.
 If Claude loses context mid-game, recover instantly:
 
 ```bash
-python3 "plugins/chess-coach/scripts/engine.py" status
-python3 "plugins/chess-coach/scripts/render.py" --plain
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/engine.py" status
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" --plain
 ```
 
 Tell the user: "I've reloaded the game from disk — here's the current position."
