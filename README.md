@@ -1,16 +1,21 @@
-# ♟ Chess Tutor
+# ♟ claude-chess
 
 > I got tired of alt-tabbing between my terminal and a chess website. So I built a chess coach that lives inside Claude Code.
+
+> **This is a fork of [yongqyu/claude-chess](https://github.com/yongqyu/claude-chess).**
+> Upstream assumes you already know how to play. This fork adds **Learn Mode**:
+> a lesson curriculum that teaches chess from zero, so you can arrive at the
+> board without knowing how a pawn moves. Everything upstream does, it still does.
 
 ---
 
 ## What is this?
 
-It's a Claude Code plugin that teaches you chess from zero and then plays it with you — right in your terminal, with Claude as your coach.
+It's a Claude Code plugin that lets you play chess — right in your terminal, with Claude as your coach.
 
-If you've never played, start with Learn Mode: a ten-lesson curriculum that walks you from how a pawn moves to your first guided game. Every lesson is checked by a script, not by Claude's opinion, so "correct" means correct.
+After every move, Claude tells you if it was good or terrible, shows you what you *should* have played, and explains why it made its own move. When you're done, it saves a full game review to a Markdown file, including your estimated ELO.
 
-If you already play, skip straight to a game. After every move, Claude tells you if it was good or terrible, shows you what you *should* have played, and explains why it made its own move. When you're done, it saves a full game review to a Markdown file, including your estimated ELO.
+And if you've never played at all, you don't need to find a tutorial first. Say you want to learn, and Claude runs you through a ten-lesson curriculum before you ever face an opponent. That part is what this fork adds — see [Learn Mode](#learn-mode--from-zero) below.
 
 No Stockfish required. No separate app. Just Claude.
 
@@ -67,23 +72,65 @@ ANSI color codes are terminal-only — they can't render in markdown chat. The c
 
 ## Learn Mode — from zero
 
-Say **"I want to learn chess"** and Claude runs the curriculum:
+Say **"I want to learn chess"** and Claude runs the curriculum. Ten lessons,
+four stages, unlocked in order:
 
-| Stage | What you practice |
-|---|---|
-| `board-and-pieces` | How the pawn, knight, bishop and rook move |
-| `special-rules` | Pawn captures and castling |
-| `material-and-mate` | The queen's reach, and mate in one |
-| `guided-play` | Your first real exchanges, with the coach beside you |
+| Stage | Lessons | What you practice |
+|---|---:|---|
+| `board-and-pieces` | 4 | How the pawn, knight, bishop and rook move |
+| `special-rules` | 2 | Pawn captures and castling |
+| `material-and-mate` | 2 | The queen's reach, and mate in one |
+| `guided-play` | 2 | Your first real exchanges, with the coach beside you |
 
-Ten lessons, unlocked in order. A few things that make it work:
+### What a lesson actually is
 
-- **The script decides, Claude narrates.** Whether you solved a lesson is a verdict from `lesson.py`, never Claude's judgement. It cannot be talked into passing you.
-- **Hints are free.** Asking for one never costs you an attempt and never blocks you from completing the lesson.
-- **Your game is untouchable.** Lesson state lives in its own file. You can have a game in progress, do three lessons, and come back to it byte-for-byte unchanged.
-- **Graduation is opt-in.** Finishing the last lesson offers you a real game. It never starts one on its own.
+A tiny position, a goal in plain English, and a check the script can run.
+The first one puts a single pawn on the board and says:
 
-Come back later and just say you want to continue — it resumes where you stopped.
+> Move your pawn from the square e2 to the square e4 in one move.
+
+Note what it does *not* say: no "advance the e-pawn two squares", no algebraic
+notation you haven't been taught yet. Every lesson names squares the long way
+and defines its own vocabulary, so you can read it cold.
+
+You get **three attempts** on a drill. Then:
+
+- **An illegal move costs you nothing.** If you try something the rules don't
+  allow, it tells you and your attempts stay where they were. Not knowing the
+  rules yet is the entire point — it can't be a penalty.
+- **A legal move that misses the goal costs one.** Strength doesn't matter,
+  only whether it did what the lesson asked. A brilliant move that ignores the
+  goal is still a miss.
+- **Hints are free.** They never cost an attempt and never block you from
+  completing the lesson. Ask for all of them if you want.
+
+Some lessons are quizzes instead: *name every square this piece can move to.*
+Your answer has to be the exact set — no missing squares, no extras. While
+you're still trying, it tells you how many you got and nothing else; the full
+answer only appears once the lesson is over.
+
+### Guided play
+
+The last two lessons are real games, played a few moves at a time. Here you
+can ask what a move would do **before committing to it** — the coach evaluates
+it, you decide, and only then does it get played. It's the bridge between
+solving positions and actually playing.
+
+### The rules underneath
+
+- **The script decides, Claude narrates.** Whether you solved a lesson is a
+  verdict from `lesson.py`, never Claude's opinion. It cannot be talked into
+  passing you, and it won't drift between sessions.
+- **Your game is untouchable.** Lesson state lives in its own file. You can
+  have a game in progress, do three lessons, and come back to it
+  byte-for-byte unchanged. Lessons don't need a game to exist, either.
+- **Graduation is opt-in.** Finishing the last lesson *offers* you a real
+  game and waits. It never starts one on its own.
+- **Replaying is free.** Redo any lesson you've already passed; your progress
+  doesn't move backwards.
+
+Progress lives in `~/.chess_coach/learning.json`. Come back a week later, say
+you want to continue, and it resumes exactly where you stopped.
 
 ---
 
