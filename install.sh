@@ -19,12 +19,21 @@ VERSION="1.1.0"
 
 echo "Installing $PLUGIN_NAME..."
 
+# A user who has never installed a plugin has no ~/.claude/plugins tree at all,
+# so create it before anything tries to read a registry file out of it.
+mkdir -p "$CLAUDE_PLUGINS/marketplaces" "$CLAUDE_PLUGINS/cache"
+
 # ── 1. Register marketplace ──────────────────────────────────────────────────
 python3 - <<PYEOF
 import json, os
 path = os.path.expanduser("~/.claude/plugins/known_marketplaces.json")
-with open(path) as f:
-    data = json.load(f)
+try:
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("not an object")
+except (FileNotFoundError, ValueError):
+    data = {}
 if "$MARKETPLACE_NAME" not in data:
     data["$MARKETPLACE_NAME"] = {
         "source": {"source": "github", "repo": "$REPO"},
@@ -59,8 +68,16 @@ python3 - <<PYEOF
 import json, os
 from datetime import datetime, timezone
 path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
-with open(path) as f:
-    data = json.load(f)
+try:
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("not an object")
+except (FileNotFoundError, ValueError):
+    data = {}
+data.setdefault("version", 2)
+if not isinstance(data.get("plugins"), dict):
+    data["plugins"] = {}
 key = "$PLUGIN_NAME@$MARKETPLACE_NAME"
 now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 if key not in data["plugins"]:
