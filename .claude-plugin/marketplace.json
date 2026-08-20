@@ -1,0 +1,19 @@
+{
+  "name": "chess-tutor",
+  "description": "Chess Tutor — a chess plugin that teaches from zero, then plays.",
+  "repository": "https://github.com/bl00p1ng/chess-tutor",
+  "owner": {
+    "name": "bl00p1ng",
+    "url": "https://github.com/bl00p1ng"
+  },
+  "plugins": [
+    {
+      "name": "chess-coach",
+      "source": "./plugins/chess-coach",
+      "version": "1.1.0",
+      "description": "Learn chess from zero through a script-verified ten-lesson curriculum, then play an adaptive AI opponent with real-time coaching, persona bots, ELO tracking, and game reviews — all on an ANSI terminal board.",
+      "category": "games",
+      "tags": ["chess", "learning", "tutorial", "games", "terminal"]
+    }
+  ]
+}

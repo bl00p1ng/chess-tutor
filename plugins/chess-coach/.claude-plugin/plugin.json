@@ -1,8 +1,8 @@
 {
   "name": "chess-coach",
-  "description": "Interactive chess with ANSI terminal board, adaptive AI opponent, real-time coaching, ELO tracking, and automatic difficulty calibration. Invoke when the user wants to play chess, get coaching, or review a past game.",
+  "description": "Teaches chess from zero through a staged, script-verified lesson curriculum, then plays: interactive chess on an ANSI terminal board with an adaptive AI opponent, real-time coaching, persona bots, ELO tracking, and automatic difficulty calibration. Invoke when the user wants to learn chess, continue a lesson, play chess, get coaching, or review a past game.",
   "author": {
-    "name": "yongqyu",
-    "email": "yongqyu@gmail.com"
+    "name": "bl00p1ng",
+    "url": "https://github.com/bl00p1ng"
   }
 }

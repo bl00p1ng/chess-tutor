@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# install.sh — Manually install the chess-coach Claude Code plugin.
-# Run this if `/plugin marketplace add` doesn't work in your session.
+# install.sh — Fallback installer for the chess-coach Claude Code plugin.
+#
+# Prefer the marketplace flow, which this repository now supports:
+#   /plugin marketplace add bl00p1ng/chess-tutor
+#   /plugin install chess-coach@chess-tutor
+#
+# Use this script only if those commands are unavailable in your session.
 #
 # Usage: bash install.sh
 
 set -euo pipefail
 
-REPO="yongqyu/claude-chess"
+REPO="bl00p1ng/chess-tutor"
 PLUGIN_NAME="chess-coach"
-MARKETPLACE_NAME="claude-chess"
+MARKETPLACE_NAME="chess-tutor"
 CLAUDE_PLUGINS="$HOME/.claude/plugins"
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 echo "Installing $PLUGIN_NAME..."
 
@@ -74,6 +79,7 @@ else:
 PYEOF
 
 echo ""
-echo "✅ chess-coach installed. Start a new Claude Code session and say: 'Let's play chess'"
+echo "✅ chess-coach installed. Start a new Claude Code session and say:"
+echo "   'I want to learn chess'  (lessons)   or   'Let's play chess'  (game)"
 echo ""
 echo "   Dependency (if needed): pip install chess --break-system-packages -q"

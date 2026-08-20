@@ -79,20 +79,31 @@ ANSI color codes are terminal-only — they can't render in markdown chat. The c
 
 ## Getting started
 
-```bash
-# Clone and install
-git clone https://github.com/yongqyu/claude-chess.git
-bash claude-chess/install.sh
+Install the plugin from this repository's marketplace:
 
-# One-time Python dependency
+```
+/plugin marketplace add bl00p1ng/chess-tutor
+/plugin install chess-coach@chess-tutor
+```
+
+Then install the one Python dependency:
+
+```bash
 pip install chess --break-system-packages -q
 ```
 
-Then open a Claude Code session and just say:
+Start a new Claude Code session and say either:
 
-> **"Let's play chess"**
+> **"I want to learn chess"** — starts the lesson curriculum from zero.
 
-That's it. Claude handles the rest — asks your color preference, checks your game history, sets difficulty, and opens the board.
+> **"Let's play chess"** — jumps straight into a game.
+
+That's it. For lessons, Claude picks up wherever you left off. For a game, it
+asks your color preference, checks your game history, sets difficulty, and
+opens the board.
+
+Installing is a deliberate, separate step: cloning this repository does not
+load anything into a Claude Code session on its own.
 
 ---
 
